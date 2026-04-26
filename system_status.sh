@@ -11,20 +11,36 @@ ALARM_ENABLED=${ALARM_ENABLED:-true}
 
 show_help() {
     cat << EOF
-用法: $0 [选项]
+用法: $0 [子命令] [选项]
 
-系统状态监控脚本，支持动态配置采样参数和多种输出格式。
+系统状态监控脚本，支持动态配置采样参数、多种输出格式和告警历史查询。
 
-选项:
+子命令:
+    query       查询告警历史记录
+    (无)       执行系统状态监控（默认行为）
+
+监控选项:
     -n 次数      设置采样次数 (默认: 5)
     -i 秒数      设置采样间隔时间 (默认: 1秒)
     -f 格式      设置输出格式 (text/json, 默认: text)
     -h, --help   显示此帮助信息
 
+查询选项 (与 query 子命令配合使用):
+    -n 数量      查询最近 N 条告警 (默认: 10)
+    -d 日期      筛选指定日期 (格式: YYYY-MM-DD)
+    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -f 格式      输出格式 (text/json, 默认: text)
+    -h, --help   显示查询子命令帮助
+
 示例:
     $0 -n 10 -i 2          采样10次，间隔2秒，文本格式输出
     $0 -n 5 -i 1 -f json   采样5次，间隔1秒，JSON格式输出
-    $0                      使用默认配置 (5次采样，间隔1秒，文本格式)
+    
+    $0 query -n 20          查询最近20条告警记录
+    $0 query -d 2026-04-26 查询指定日期的告警记录
+    $0 query -t cpu -f json 查询CPU类型的告警并以JSON格式输出
+    $0 query -n 50 -t memory -f json
+                            查询最近50条内存告警并以JSON格式输出
 EOF
 }
 
@@ -563,7 +579,557 @@ generate_stat_json() {
     printf '%s}' "$indent"
 }
 
+show_query_help() {
+    cat << EOF
+用法: $0 query [选项]
+
+查询告警历史记录。
+
+选项:
+    -n 数量      查询最近 N 条告警 (默认: 10)
+    -d 日期      筛选指定日期 (格式: YYYY-MM-DD)
+    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -f 格式      输出格式 (text/json, 默认: text)
+    -h, --help   显示此帮助信息
+
+示例:
+    $0 query -n 20               查询最近20条告警记录
+    $0 query -d 2026-04-26       查询指定日期的告警记录
+    $0 query -t cpu -f json       查询CPU类型的告警并以JSON格式输出
+    $0 query -n 50 -t memory      查询最近50条内存告警
+    $0 query -d 2026-04-26 -t cpu -f json
+                                   查询指定日期的CPU告警并以JSON格式输出
+EOF
+}
+
+is_valid_date() {
+    local date_str="$1"
+    if [[ "$date_str" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        date -j -f "%Y-%m-%d" "$date_str" +"%Y-%m-%d" >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
+parse_query_args() {
+    local QUERY_COUNT=10
+    local QUERY_DATE=""
+    local QUERY_TYPE="all"
+    local QUERY_FORMAT="text"
+    
+    while getopts ":n:d:t:f:h-" opt; do
+        case $opt in
+            n)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: 查询数量必须是有效的数字" >&2
+                    exit 1
+                fi
+                if [ "$OPTARG" -lt 1 ]; then
+                    echo "错误: 查询数量必须大于0" >&2
+                    exit 1
+                fi
+                QUERY_COUNT=$OPTARG
+                ;;
+            d)
+                if ! is_valid_date "$OPTARG"; then
+                    echo "错误: 无效的日期格式，请使用 YYYY-MM-DD 格式" >&2
+                    exit 1
+                fi
+                QUERY_DATE=$OPTARG
+                ;;
+            t)
+                case "$OPTARG" in
+                    cpu|memory|all)
+                        QUERY_TYPE=$OPTARG
+                        ;;
+                    CPU)
+                        QUERY_TYPE="cpu"
+                        ;;
+                    MEMORY|Memory)
+                        QUERY_TYPE="memory"
+                        ;;
+                    ALL|All)
+                        QUERY_TYPE="all"
+                        ;;
+                    *)
+                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        exit 1
+                        ;;
+                esac
+                ;;
+            f)
+                case "$OPTARG" in
+                    text|json)
+                        QUERY_FORMAT=$OPTARG
+                        ;;
+                    TEXT|JSON)
+                        QUERY_FORMAT=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')
+                        ;;
+                    *)
+                        echo "错误: 输出格式只能是 'text' 或 'json'" >&2
+                        exit 1
+                        ;;
+                esac
+                ;;
+            h)
+                show_query_help
+                exit 0
+                ;;
+            -)
+                case "${OPTARG}" in
+                    help)
+                        show_query_help
+                        exit 0
+                        ;;
+                    *)
+                        echo "错误: 无效选项 --$OPTARG" >&2
+                        show_query_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            \?)
+                echo "错误: 无效选项 -$OPTARG" >&2
+                show_query_help
+                exit 1
+                ;;
+            :)
+                echo "错误: 选项 -$OPTARG 需要参数" >&2
+                show_query_help
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND -1))
+    
+    echo "$QUERY_COUNT|$QUERY_DATE|$QUERY_TYPE|$QUERY_FORMAT"
+}
+
+GLOBAL_RAW_ALARMS=()
+GLOBAL_FILTERED_ALARMS=()
+
+parse_alarm_logs() {
+    local log_dir="$1"
+    
+    if [ ! -d "$log_dir" ]; then
+        return 0
+    fi
+    
+    local log_file
+    local line
+    local timestamp
+    local week_year
+    local sample_num
+    local server_id
+    local os
+    local mem_total
+    local mem_available
+    local cpu_value
+    local cpu_threshold
+    local mem_value
+    local mem_threshold
+    
+    while IFS= read -r -d '' log_file; do
+        if [ ! -f "$log_file" ]; then
+            continue
+        fi
+        
+        while IFS= read -r line; do
+            if [ -z "$line" ]; then
+                continue
+            fi
+            
+            if [[ "$line" =~ \[([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\]\ \[([^]]+)\]\ \[采样=([0-9]+)\]\ \[ServerID=([^]]+)\]\ \[OS=([^]]+)\]\ 总内存=([0-9]+)KB\ 可用内存=([0-9]+)KB ]]; then
+                timestamp="${BASH_REMATCH[1]}"
+                week_year="${BASH_REMATCH[2]}"
+                sample_num="${BASH_REMATCH[3]}"
+                server_id="${BASH_REMATCH[4]}"
+                os="${BASH_REMATCH[5]}"
+                mem_total="${BASH_REMATCH[6]}"
+                mem_available="${BASH_REMATCH[7]}"
+                
+                local alarm_entry=""
+                alarm_entry+="timestamp=$timestamp|"
+                alarm_entry+="week_year=$week_year|"
+                alarm_entry+="sample_num=$sample_num|"
+                alarm_entry+="server_id=$server_id|"
+                alarm_entry+="os=$os|"
+                alarm_entry+="mem_total=$mem_total|"
+                alarm_entry+="mem_available=$mem_available|"
+                
+                if [[ "$line" =~ CPU=([0-9.]+)%\ \(阈值=([0-9.]+)%\) ]]; then
+                    cpu_value="${BASH_REMATCH[1]}"
+                    cpu_threshold="${BASH_REMATCH[2]}"
+                    GLOBAL_RAW_ALARMS+=("${alarm_entry}type=cpu|value=$cpu_value|threshold=$cpu_threshold")
+                fi
+                
+                if [[ "$line" =~ 内存=([0-9.]+)%\ \(阈值=([0-9.]+)%\) ]]; then
+                    mem_value="${BASH_REMATCH[1]}"
+                    mem_threshold="${BASH_REMATCH[2]}"
+                    GLOBAL_RAW_ALARMS+=("${alarm_entry}type=memory|value=$mem_value|threshold=$mem_threshold")
+                fi
+            fi
+        done < "$log_file"
+    done < <(find "$log_dir" -name "alarm_*.log" -type f 2>/dev/null -print0 | sort -z)
+}
+
+filter_alarms() {
+    local query_date="$1"
+    local query_type="$2"
+    local query_count="$3"
+    
+    GLOBAL_FILTERED_ALARMS=()
+    
+    if [ ${#GLOBAL_RAW_ALARMS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    local -a temp_list=()
+    local entry
+    local timestamp
+    local alarm_type
+    
+    for entry in "${GLOBAL_RAW_ALARMS[@]}"; do
+        if [[ "$entry" =~ timestamp=([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
+            timestamp="${BASH_REMATCH[1]}"
+        else
+            continue
+        fi
+        
+        if [[ "$entry" =~ type=([a-z]+) ]]; then
+            alarm_type="${BASH_REMATCH[1]}"
+        else
+            continue
+        fi
+        
+        if [ -n "$query_date" ]; then
+            local entry_date="${timestamp%% *}"
+            if [ "$entry_date" != "$query_date" ]; then
+                continue
+            fi
+        fi
+        
+        if [ "$query_type" != "all" ] && [ "$alarm_type" != "$query_type" ]; then
+            continue
+        fi
+        
+        temp_list+=("$timestamp|$entry")
+    done
+    
+    if [ ${#temp_list[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    local -a sorted_list=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && sorted_list+=("$line")
+    done < <(printf '%s\n' "${temp_list[@]}" | sort -r)
+    
+    local count=0
+    local item
+    local -a selected_list=()
+    for item in "${sorted_list[@]}"; do
+        if [ $count -ge "$query_count" ]; then
+            break
+        fi
+        
+        local entry_data="${item#*|}"
+        selected_list+=("$entry_data")
+        ((count++))
+    done
+    
+    if [ ${#selected_list[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    while IFS= read -r line; do
+        [ -n "$line" ] && GLOBAL_FILTERED_ALARMS+=("$line")
+    done < <(printf '%s\n' "${selected_list[@]}" | tail -r)
+}
+
+extract_alarm_field() {
+    local entry="$1"
+    local field_name="$2"
+    
+    if [[ "$entry" =~ $field_name=([^|]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo ""
+    fi
+}
+
+output_alarms_text() {
+    local query_count="$1"
+    local query_date="$2"
+    local query_type="$3"
+    
+    if [ ${#GLOBAL_FILTERED_ALARMS[@]} -eq 0 ]; then
+        echo "========================================"
+        echo "告警历史查询结果"
+        echo "========================================"
+        echo ""
+        echo "查询条件:"
+        echo "  数量: 最近 $query_count 条"
+        if [ -n "$query_date" ]; then
+            echo "  日期: $query_date"
+        fi
+        echo "  类型: $query_type"
+        echo ""
+        echo "----------------------------------------"
+        echo "未找到任何告警记录"
+        echo "========================================"
+        return 0
+    fi
+    
+    echo "========================================"
+    echo "告警历史查询结果"
+    echo "========================================"
+    echo ""
+    echo "查询条件:"
+    echo "  数量: 最近 $query_count 条"
+    if [ -n "$query_date" ]; then
+        echo "  日期: $query_date"
+    fi
+    echo "  类型: $query_type"
+    echo ""
+    echo "查询结果: 共 ${#GLOBAL_FILTERED_ALARMS[@]} 条告警记录"
+    echo "========================================"
+    echo ""
+    
+    printf "%-20s %-8s %-12s %-12s %-8s\n" "时间" "类型" "当前值(%)" "阈值(%)" "服务器ID"
+    echo "-------------------------------------------------------------------------"
+    
+    local entry
+    for entry in "${GLOBAL_FILTERED_ALARMS[@]}"; do
+        local timestamp=$(extract_alarm_field "$entry" "timestamp")
+        local alarm_type=$(extract_alarm_field "$entry" "type")
+        local value=$(extract_alarm_field "$entry" "value")
+        local threshold=$(extract_alarm_field "$entry" "threshold")
+        local server_id=$(extract_alarm_field "$entry" "server_id")
+        
+        local display_type
+        if [ "$alarm_type" = "cpu" ]; then
+            display_type="CPU"
+        elif [ "$alarm_type" = "memory" ]; then
+            display_type="内存"
+        else
+            display_type="$alarm_type"
+        fi
+        
+        printf "%-20s %-8s %-12s %-12s %-8s\n" "$timestamp" "$display_type" "$value" "$threshold" "$server_id"
+    done
+    
+    echo "-------------------------------------------------------------------------"
+    echo ""
+    echo "查询完成！"
+}
+
+output_alarms_json() {
+    local query_count="$1"
+    local query_date="$2"
+    local query_type="$3"
+    
+    echo "{"
+    echo "    \"query_info\": {"
+    echo "        \"count_requested\": $query_count,"
+    if [ -n "$query_date" ]; then
+        echo "        \"filter_date\": \"$query_date\","
+    else
+        echo "        \"filter_date\": null,"
+    fi
+    echo "        \"filter_type\": \"$query_type\","
+    echo "        \"count_found\": ${#GLOBAL_FILTERED_ALARMS[@]}"
+    echo "    },"
+    
+    if [ ${#GLOBAL_FILTERED_ALARMS[@]} -eq 0 ]; then
+        echo "    \"alarms\": []"
+    else
+        echo "    \"alarms\": ["
+        
+        local entry
+        local -i index=0
+        local total=${#GLOBAL_FILTERED_ALARMS[@]}
+        
+        for entry in "${GLOBAL_FILTERED_ALARMS[@]}"; do
+            local timestamp=$(extract_alarm_field "$entry" "timestamp")
+            local week_year=$(extract_alarm_field "$entry" "week_year")
+            local sample_num=$(extract_alarm_field "$entry" "sample_num")
+            local server_id=$(extract_alarm_field "$entry" "server_id")
+            local os=$(extract_alarm_field "$entry" "os")
+            local mem_total=$(extract_alarm_field "$entry" "mem_total")
+            local mem_available=$(extract_alarm_field "$entry" "mem_available")
+            local alarm_type=$(extract_alarm_field "$entry" "type")
+            local value=$(extract_alarm_field "$entry" "value")
+            local threshold=$(extract_alarm_field "$entry" "threshold")
+            
+            local escaped_timestamp=$(escape_json_string "$timestamp")
+            local escaped_week_year=$(escape_json_string "$week_year")
+            local escaped_server_id=$(escape_json_string "$server_id")
+            local escaped_os=$(escape_json_string "$os")
+            local escaped_type=$(escape_json_string "$alarm_type")
+            
+            echo "        {"
+            echo "            \"timestamp\": \"$escaped_timestamp\","
+            echo "            \"week_year\": \"$escaped_week_year\","
+            echo "            \"sample_num\": $sample_num,"
+            echo "            \"server_id\": \"$escaped_server_id\","
+            echo "            \"os\": \"$escaped_os\","
+            echo "            \"memory_total_kb\": $mem_total,"
+            echo "            \"memory_available_kb\": $mem_available,"
+            echo "            \"type\": \"$escaped_type\","
+            echo "            \"value\": $value,"
+            echo "            \"threshold\": $threshold"
+            
+            if [ $index -lt $((total - 1)) ]; then
+                echo "        },"
+            else
+                echo "        }"
+            fi
+            
+            ((index++))
+        done
+        
+        echo "    ]"
+    fi
+    
+    echo "}"
+}
+
+query_alarms() {
+    shift
+    
+    for arg in "$@"; do
+        if [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
+            show_query_help
+            exit 0
+        fi
+    done
+    
+    local QUERY_COUNT=10
+    local QUERY_DATE=""
+    local QUERY_TYPE="all"
+    local QUERY_FORMAT="text"
+    
+    OPTIND=1
+    while getopts ":n:d:t:f:h-" opt; do
+        case $opt in
+            n)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: 查询数量必须是有效的数字" >&2
+                    show_query_help
+                    exit 1
+                fi
+                if [ "$OPTARG" -lt 1 ]; then
+                    echo "错误: 查询数量必须大于0" >&2
+                    show_query_help
+                    exit 1
+                fi
+                QUERY_COUNT=$OPTARG
+                ;;
+            d)
+                if ! is_valid_date "$OPTARG"; then
+                    echo "错误: 无效的日期格式，请使用 YYYY-MM-DD 格式" >&2
+                    show_query_help
+                    exit 1
+                fi
+                QUERY_DATE=$OPTARG
+                ;;
+            t)
+                case "$OPTARG" in
+                    cpu|memory|all)
+                        QUERY_TYPE=$OPTARG
+                        ;;
+                    CPU)
+                        QUERY_TYPE="cpu"
+                        ;;
+                    MEMORY|Memory)
+                        QUERY_TYPE="memory"
+                        ;;
+                    ALL|All)
+                        QUERY_TYPE="all"
+                        ;;
+                    *)
+                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        show_query_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            f)
+                case "$OPTARG" in
+                    text|json)
+                        QUERY_FORMAT=$OPTARG
+                        ;;
+                    TEXT|JSON)
+                        QUERY_FORMAT=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')
+                        ;;
+                    *)
+                        echo "错误: 输出格式只能是 'text' 或 'json'" >&2
+                        show_query_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            h)
+                show_query_help
+                exit 0
+                ;;
+            -)
+                case "${OPTARG}" in
+                    help)
+                        show_query_help
+                        exit 0
+                        ;;
+                    *)
+                        echo "错误: 无效选项 --$OPTARG" >&2
+                        show_query_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            \?)
+                echo "错误: 无效选项 -$OPTARG" >&2
+                show_query_help
+                exit 1
+                ;;
+            :)
+                echo "错误: 选项 -$OPTARG 需要参数" >&2
+                show_query_help
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND -1))
+    
+    local log_dir=$(get_alarm_log_dir)
+    local alt_log_dir="./logs"
+    
+    GLOBAL_RAW_ALARMS=()
+    GLOBAL_FILTERED_ALARMS=()
+    
+    if [ -d "$log_dir" ]; then
+        parse_alarm_logs "$log_dir"
+    fi
+    
+    if [ -d "$alt_log_dir" ] && [ "$log_dir" != "$alt_log_dir" ]; then
+        parse_alarm_logs "$alt_log_dir"
+    fi
+    
+    filter_alarms "$QUERY_DATE" "$QUERY_TYPE" "$QUERY_COUNT"
+    
+    if [ "$QUERY_FORMAT" = "json" ]; then
+        output_alarms_json "$QUERY_COUNT" "$QUERY_DATE" "$QUERY_TYPE"
+    else
+        output_alarms_text "$QUERY_COUNT" "$QUERY_DATE" "$QUERY_TYPE"
+    fi
+}
+
 main() {
+    if [ "$1" = "query" ]; then
+        query_alarms "$@"
+        return $?
+    fi
+    
     parse_args "$@"
     
     local os=$(get_os_type)

@@ -1041,7 +1041,7 @@ output_alarms_json() {
 escape_csv_field() {
     local field="$1"
     
-    if [[ "$field" == *,* ]] || [[ "$field" == *'"'* ]] || [[ "$field" == *$'\n'* ]]; then
+    if [[ "$field" == *,* ]] || [[ "$field" == *'"'* ]] || [[ "$field" == *$'\n'* ]] || [[ "$field" == *' '* ]]; then
         field="${field//\"/\"\"}"
         echo "\"$field\""
     else
@@ -1565,6 +1565,11 @@ main() {
     if [ "$1" = "stats" ]; then
         stats_alarms "$@"
         return $?
+    fi
+    
+    if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+        show_help
+        exit 0
     fi
     
     parse_args "$@"

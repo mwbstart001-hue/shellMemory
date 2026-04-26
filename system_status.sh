@@ -17,6 +17,7 @@ show_help() {
 
 子命令:
     query       查询告警历史记录
+    stats       按天统计告警频率
     (无)       执行系统状态监控（默认行为）
 
 监控选项:
@@ -32,6 +33,12 @@ show_help() {
     -f 格式      输出格式 (text/json, 默认: text)
     -h, --help   显示查询子命令帮助
 
+统计选项 (与 stats 子命令配合使用):
+    -d 天数      统计最近 N 天 (默认: 7)
+    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -f 格式      输出格式 (text/json, 默认: text)
+    -h, --help   显示统计子命令帮助
+
 示例:
     $0 -n 10 -i 2          采样10次，间隔2秒，文本格式输出
     $0 -n 5 -i 1 -f json   采样5次，间隔1秒，JSON格式输出
@@ -41,6 +48,11 @@ show_help() {
     $0 query -t cpu -f json 查询CPU类型的告警并以JSON格式输出
     $0 query -n 50 -t memory -f json
                             查询最近50条内存告警并以JSON格式输出
+    
+    $0 stats                统计最近7天告警频率
+    $0 stats -d 30          统计最近30天告警频率
+    $0 stats -t cpu         统计最近7天CPU告警频率
+    $0 stats -d 14 -f json  统计最近14天告警频率并以JSON格式输出
 EOF
 }
 
@@ -589,16 +601,45 @@ show_query_help() {
     -n 数量      查询最近 N 条告警 (默认: 10)
     -d 日期      筛选指定日期 (格式: YYYY-MM-DD)
     -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
-    -f 格式      输出格式 (text/json, 默认: text)
+    -f 格式      输出格式 (text/json/csv, 默认: text)
     -h, --help   显示此帮助信息
 
 示例:
     $0 query -n 20               查询最近20条告警记录
     $0 query -d 2026-04-26       查询指定日期的告警记录
     $0 query -t cpu -f json       查询CPU类型的告警并以JSON格式输出
+    $0 query -t cpu -f csv        查询CPU类型的告警并以CSV格式输出
     $0 query -n 50 -t memory      查询最近50条内存告警
     $0 query -d 2026-04-26 -t cpu -f json
                                    查询指定日期的CPU告警并以JSON格式输出
+    $0 query -n 20 -f csv
+                                   查询最近20条告警并以CSV格式输出
+
+CSV输出格式:
+    timestamp,type,value,threshold,server_id
+    2026-04-26 15:36:10,memory,81.30,80.0,V_AWBMA-MB0
+    2026-04-26 15:35:23,cpu,82.60,80.0,V_AWBMA-MB0
+EOF
+}
+
+show_stats_help() {
+    cat << EOF
+用法: $0 stats [选项]
+
+按天统计告警频率。
+
+选项:
+    -d 天数      统计最近 N 天 (默认: 7)
+    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -f 格式      输出格式 (text/json, 默认: text)
+    -h, --help   显示此帮助信息
+
+示例:
+    $0 stats                    统计最近7天告警频率
+    $0 stats -d 30              统计最近30天告警频率
+    $0 stats -t cpu             统计最近7天CPU告警频率
+    $0 stats -t memory          统计最近7天内存告警频率
+    $0 stats -d 14 -f json      统计最近14天告警频率并以JSON格式输出
 EOF
 }
 
@@ -707,6 +748,8 @@ parse_query_args() {
 
 GLOBAL_RAW_ALARMS=()
 GLOBAL_FILTERED_ALARMS=()
+GLOBAL_STATS_DAYS=()
+GLOBAL_STATS_TOTAL=()
 
 parse_alarm_logs() {
     local log_dir="$1"
@@ -995,6 +1038,46 @@ output_alarms_json() {
     echo "}"
 }
 
+escape_csv_field() {
+    local field="$1"
+    
+    if [[ "$field" == *,* ]] || [[ "$field" == *'"'* ]] || [[ "$field" == *$'\n'* ]]; then
+        field="${field//\"/\"\"}"
+        echo "\"$field\""
+    else
+        echo "$field"
+    fi
+}
+
+output_alarms_csv() {
+    local query_count="$1"
+    local query_date="$2"
+    local query_type="$3"
+    
+    echo "timestamp,type,value,threshold,server_id"
+    
+    if [ ${#GLOBAL_FILTERED_ALARMS[@]} -eq 0 ]; then
+        return 0
+    fi
+    
+    local entry
+    for entry in "${GLOBAL_FILTERED_ALARMS[@]}"; do
+        local timestamp=$(extract_alarm_field "$entry" "timestamp")
+        local alarm_type=$(extract_alarm_field "$entry" "type")
+        local value=$(extract_alarm_field "$entry" "value")
+        local threshold=$(extract_alarm_field "$entry" "threshold")
+        local server_id=$(extract_alarm_field "$entry" "server_id")
+        
+        local escaped_timestamp=$(escape_csv_field "$timestamp")
+        local escaped_type=$(escape_csv_field "$alarm_type")
+        local escaped_value=$(escape_csv_field "$value")
+        local escaped_threshold=$(escape_csv_field "$threshold")
+        local escaped_server_id=$(escape_csv_field "$server_id")
+        
+        echo "$escaped_timestamp,$escaped_type,$escaped_value,$escaped_threshold,$escaped_server_id"
+    done
+}
+
 query_alarms() {
     shift
     
@@ -1057,14 +1140,14 @@ query_alarms() {
                 ;;
             f)
                 case "$OPTARG" in
-                    text|json)
+                    text|json|csv)
                         QUERY_FORMAT=$OPTARG
                         ;;
-                    TEXT|JSON)
+                    TEXT|JSON|CSV)
                         QUERY_FORMAT=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')
                         ;;
                     *)
-                        echo "错误: 输出格式只能是 'text' 或 'json'" >&2
+                        echo "错误: 输出格式只能是 'text'、'json' 或 'csv'" >&2
                         show_query_help
                         exit 1
                         ;;
@@ -1114,14 +1197,373 @@ query_alarms() {
     
     if [ "$QUERY_FORMAT" = "json" ]; then
         output_alarms_json "$QUERY_COUNT" "$QUERY_DATE" "$QUERY_TYPE"
+    elif [ "$QUERY_FORMAT" = "csv" ]; then
+        output_alarms_csv "$QUERY_COUNT" "$QUERY_DATE" "$QUERY_TYPE"
     else
         output_alarms_text "$QUERY_COUNT" "$QUERY_DATE" "$QUERY_TYPE"
+    fi
+}
+
+calculate_daily_stats() {
+    local days_count="$1"
+    local query_type="$2"
+    
+    GLOBAL_STATS_DAYS=()
+    GLOBAL_STATS_TOTAL=()
+    
+    if [ ${#GLOBAL_RAW_ALARMS[@]} -eq 0 ]; then
+        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0")
+        return 0
+    fi
+    
+    local total_count=0
+    local total_cpu=0
+    local total_memory=0
+    
+    local today=$(date "+%Y-%m-%d")
+    local today_sec=$(date -j -f "%Y-%m-%d" "$today" "+%s" 2>/dev/null || echo "0")
+    local cutoff_sec=$(( today_sec - days_count * 86400 ))
+    
+    local -a filtered_entries=()
+    local entry
+    local timestamp
+    local alarm_type
+    local entry_date
+    local entry_sec
+    
+    for entry in "${GLOBAL_RAW_ALARMS[@]}"; do
+        if [[ "$entry" =~ timestamp=([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}) ]]; then
+            timestamp="${BASH_REMATCH[1]}"
+        else
+            continue
+        fi
+        
+        if [[ "$entry" =~ type=([a-z]+) ]]; then
+            alarm_type="${BASH_REMATCH[1]}"
+        else
+            continue
+        fi
+        
+        if [ "$query_type" != "all" ] && [ "$alarm_type" != "$query_type" ]; then
+            continue
+        fi
+        
+        entry_date="${timestamp%% *}"
+        entry_sec=$(date -j -f "%Y-%m-%d" "$entry_date" "+%s" 2>/dev/null || echo "0")
+        
+        if [ "$entry_sec" -lt "$cutoff_sec" ]; then
+            continue
+        fi
+        
+        filtered_entries+=("${entry_date}|${alarm_type}")
+    done
+    
+    if [ ${#filtered_entries[@]} -eq 0 ]; then
+        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0")
+        return 0
+    fi
+    
+    local -a sorted_entries=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && sorted_entries+=("$line")
+    done < <(printf '%s\n' "${filtered_entries[@]}" | sort)
+    
+    local current_date=""
+    local day_count=0
+    local day_cpu=0
+    local day_memory=0
+    
+    local item
+    local item_date
+    local item_type
+    
+    for item in "${sorted_entries[@]}"; do
+        item_date="${item%%|*}"
+        item_type="${item#*|}"
+        
+        if [ "$current_date" != "$item_date" ]; then
+            if [ -n "$current_date" ]; then
+                GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}")
+            fi
+            current_date="$item_date"
+            day_count=0
+            day_cpu=0
+            day_memory=0
+        fi
+        
+        ((day_count++))
+        ((total_count++))
+        
+        if [ "$item_type" = "cpu" ]; then
+            ((day_cpu++))
+            ((total_cpu++))
+        elif [ "$item_type" = "memory" ]; then
+            ((day_memory++))
+            ((total_memory++))
+        fi
+    done
+    
+    if [ -n "$current_date" ]; then
+        GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}")
+    fi
+    
+    GLOBAL_STATS_TOTAL=("total_count=$total_count" "total_cpu=$total_cpu" "total_memory=$total_memory")
+}
+
+extract_stats_field() {
+    local entry="$1"
+    local field_name="$2"
+    
+    if [[ "$entry" =~ $field_name=([^|]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo ""
+    fi
+}
+
+output_stats_text() {
+    local days_count="$1"
+    local query_type="$2"
+    
+    echo "========================================"
+    echo "告警频率统计结果"
+    echo "========================================"
+    echo ""
+    echo "查询条件:"
+    echo "  时间范围: 最近 $days_count 天"
+    echo "  类型: $query_type"
+    echo ""
+    
+    local total_count=$(extract_stats_field "${GLOBAL_STATS_TOTAL[0]}" "total_count")
+    local total_cpu=$(extract_stats_field "${GLOBAL_STATS_TOTAL[1]}" "total_cpu")
+    local total_memory=$(extract_stats_field "${GLOBAL_STATS_TOTAL[2]}" "total_memory")
+    
+    if [ ${#GLOBAL_STATS_DAYS[@]} -eq 0 ]; then
+        echo "----------------------------------------"
+        echo "未找到任何告警记录"
+        echo "========================================"
+        return 0
+    fi
+    
+    echo "统计汇总:"
+    echo "  总告警次数: $total_count"
+    if [ "$query_type" = "all" ]; then
+        echo "  CPU告警: $total_cpu 次"
+        echo "  内存告警: $total_memory 次"
+    fi
+    echo "========================================"
+    echo ""
+    
+    if [ "$query_type" = "all" ]; then
+        printf "%-12s %-8s %-8s %-8s\n" "日期" "总次数" "CPU次数" "内存次数"
+        echo "----------------------------------------"
+        
+        local entry
+        for entry in "${GLOBAL_STATS_DAYS[@]}"; do
+            local date=$(extract_stats_field "$entry" "date")
+            local count=$(extract_stats_field "$entry" "count")
+            local cpu_count=$(extract_stats_field "$entry" "cpu_count")
+            local memory_count=$(extract_stats_field "$entry" "memory_count")
+            
+            printf "%-12s %-8s %-8s %-8s\n" "$date" "$count" "$cpu_count" "$memory_count"
+        done
+    else
+        printf "%-12s %-8s\n" "日期" "告警次数"
+        echo "----------------------------------------"
+        
+        local entry
+        for entry in "${GLOBAL_STATS_DAYS[@]}"; do
+            local date=$(extract_stats_field "$entry" "date")
+            local count=$(extract_stats_field "$entry" "count")
+            
+            printf "%-12s %-8s\n" "$date" "$count"
+        done
+    fi
+    
+    echo "----------------------------------------"
+    echo ""
+    echo "统计完成！"
+}
+
+output_stats_json() {
+    local days_count="$1"
+    local query_type="$2"
+    
+    local total_count=$(extract_stats_field "${GLOBAL_STATS_TOTAL[0]}" "total_count")
+    local total_cpu=$(extract_stats_field "${GLOBAL_STATS_TOTAL[1]}" "total_cpu")
+    local total_memory=$(extract_stats_field "${GLOBAL_STATS_TOTAL[2]}" "total_memory")
+    
+    echo "{"
+    echo "    \"query_info\": {"
+    echo "        \"days_requested\": $days_count,"
+    echo "        \"filter_type\": \"$query_type\""
+    echo "    },"
+    echo "    \"total\": {"
+    echo "        \"total_count\": $total_count,"
+    echo "        \"cpu_count\": $total_cpu,"
+    echo "        \"memory_count\": $total_memory"
+    echo "    },"
+    
+    if [ ${#GLOBAL_STATS_DAYS[@]} -eq 0 ]; then
+        echo "    \"days\": []"
+    else
+        echo "    \"days\": ["
+        
+        local entry
+        local -i index=0
+        local total=${#GLOBAL_STATS_DAYS[@]}
+        
+        for entry in "${GLOBAL_STATS_DAYS[@]}"; do
+            local date=$(extract_stats_field "$entry" "date")
+            local count=$(extract_stats_field "$entry" "count")
+            local cpu_count=$(extract_stats_field "$entry" "cpu_count")
+            local memory_count=$(extract_stats_field "$entry" "memory_count")
+            
+            echo "        {"
+            echo "            \"date\": \"$date\","
+            echo "            \"total_count\": $count,"
+            echo "            \"cpu_count\": $cpu_count,"
+            echo "            \"memory_count\": $memory_count"
+            
+            if [ $index -lt $((total - 1)) ]; then
+                echo "        },"
+            else
+                echo "        }"
+            fi
+            
+            ((index++))
+        done
+        
+        echo "    ]"
+    fi
+    
+    echo "}"
+}
+
+stats_alarms() {
+    shift
+    
+    for arg in "$@"; do
+        if [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
+            show_stats_help
+            exit 0
+        fi
+    done
+    
+    local STATS_DAYS=7
+    local STATS_TYPE="all"
+    local STATS_FORMAT="text"
+    
+    OPTIND=1
+    while getopts ":d:t:f:h-" opt; do
+        case $opt in
+            d)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: 天数必须是有效的数字" >&2
+                    show_stats_help
+                    exit 1
+                fi
+                if [ "$OPTARG" -lt 1 ]; then
+                    echo "错误: 天数必须大于0" >&2
+                    show_stats_help
+                    exit 1
+                fi
+                STATS_DAYS=$OPTARG
+                ;;
+            t)
+                case "$OPTARG" in
+                    cpu|memory|all)
+                        STATS_TYPE=$OPTARG
+                        ;;
+                    CPU)
+                        STATS_TYPE="cpu"
+                        ;;
+                    MEMORY|Memory)
+                        STATS_TYPE="memory"
+                        ;;
+                    ALL|All)
+                        STATS_TYPE="all"
+                        ;;
+                    *)
+                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        show_stats_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            f)
+                case "$OPTARG" in
+                    text|json)
+                        STATS_FORMAT=$OPTARG
+                        ;;
+                    TEXT|JSON)
+                        STATS_FORMAT=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')
+                        ;;
+                    *)
+                        echo "错误: 输出格式只能是 'text' 或 'json'" >&2
+                        show_stats_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            h)
+                show_stats_help
+                exit 0
+                ;;
+            -)
+                case "${OPTARG}" in
+                    help)
+                        show_stats_help
+                        exit 0
+                        ;;
+                    *)
+                        echo "错误: 无效选项 --$OPTARG" >&2
+                        show_stats_help
+                        exit 1
+                        ;;
+                esac
+                ;;
+            \?)
+                echo "错误: 无效选项 -$OPTARG" >&2
+                show_stats_help
+                exit 1
+                ;;
+            :)
+                echo "错误: 选项 -$OPTARG 需要参数" >&2
+                show_stats_help
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND -1))
+    
+    local log_dir="./logs"
+    
+    GLOBAL_RAW_ALARMS=()
+    GLOBAL_STATS_DAYS=()
+    GLOBAL_STATS_TOTAL=()
+    
+    if [ -d "$log_dir" ]; then
+        parse_alarm_logs "$log_dir"
+    fi
+    
+    calculate_daily_stats "$STATS_DAYS" "$STATS_TYPE"
+    
+    if [ "$STATS_FORMAT" = "json" ]; then
+        output_stats_json "$STATS_DAYS" "$STATS_TYPE"
+    else
+        output_stats_text "$STATS_DAYS" "$STATS_TYPE"
     fi
 }
 
 main() {
     if [ "$1" = "query" ]; then
         query_alarms "$@"
+        return $?
+    fi
+    
+    if [ "$1" = "stats" ]; then
+        stats_alarms "$@"
         return $?
     fi
     

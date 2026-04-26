@@ -2,7 +2,7 @@
 
 ## 测试信息
 
-- **测试时间**: 2026-04-26 14:07:34
+- **测试时间**: 2026-04-26 14:12:13
 - **操作系统**: macOS
 - **系统版本**: ProductName:		macOS
 ProductVersion:		26.2
@@ -44,12 +44,12 @@ macOS 平台专用测试套件 - 详细日志
 [PASS] top -l 2 返回至少 2 个 CPU 使用行
        详情: 获取到        2 行
 [PASS] CPU 使用行格式验证
-       详情: 行内容: CPU usage: 22.70% user, 22.81% sys, 54.48% idle 
+       详情: 行内容: CPU usage: 35.44% user, 31.11% sys, 33.44% idle 
 [PASS] CPU 行包含 user/sys/idle 关键字
 [PASS] idle 百分比提取成功
-       详情: idle = 54.48%
+       详情: idle = 33.44%
 [PASS] CPU 使用率计算 (100 - idle)
-       详情: idle=54.48%, CPU=45.52%
+       详情: idle=33.44%, CPU=66.56%
 
 ========================================
   测试 3: macOS CPU - 边界情况测试
@@ -81,17 +81,17 @@ macOS 平台专用测试套件 - 详细日志
 [PASS] 页面大小解析成功
        详情: 页面大小: 16384 字节
 [PASS] vm_stat 包含 Pages free:
-       详情: 值: 4490 页
+       详情: 值: 4531 页
 [PASS] vm_stat 包含 Pages active:
-       详情: 值: 209930 页
+       详情: 值: 169489 页
 [PASS] vm_stat 包含 Pages inactive:
-       详情: 值: 207057 页
+       详情: 值: 162333 页
 [PASS] vm_stat 包含 Pages speculative:
-       详情: 值: 1857 页
+       详情: 值: 6530 页
 [PASS] vm_stat 包含 Pages wired down:
-       详情: 值: 143793 页
+       详情: 值: 157005 页
 [PASS] vm_stat 包含 Pages occupied by compressor:
-       详情: 值: 445554 页
+       详情: 值: 512828 页
 
 ========================================
   测试 6: macOS 内存 - 计算逻辑测试
@@ -181,4 +181,4 @@ macOS 平台专用测试套件 - 详细日志
 - 验证输出格式正确性
 
 ---
-*测试报告生成时间: 2026-04-26 14:07:34*
+*测试报告生成时间: 2026-04-26 14:12:13*

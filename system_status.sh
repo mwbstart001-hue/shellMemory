@@ -159,7 +159,7 @@ get_alarm_log_dir() {
 }
 
 get_weekly_log_filename() {
-    local year=$(date +%Y)
+    local year=$(date +%G)
     local week=$(date +%V)
     echo "alarm_${year}_${week}.log"
 }
@@ -489,7 +489,7 @@ write_alarm_log() {
     local log_file="$log_dir/$log_filename"
     
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-    local week_year=$(date "+%Y年第%V周")
+    local week_year=$(date "+%G年第%V周")
     
     if [ ! -d "$log_dir" ]; then
         mkdir -p "$log_dir" 2>/dev/null

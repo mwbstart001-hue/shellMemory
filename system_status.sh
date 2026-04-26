@@ -522,11 +522,45 @@ write_alarm_log() {
     echo "$log_entry" >> "$log_file" 2>/dev/null
     
     if [ "$cpu_exceed" -eq 1 ]; then
-        echo -e "\033[0;31m[ALARM] CPU使用率 $cpu_usage% 超过阈值 $cpu_threshold%\033[0m"
+        echo -e "\033[0;31m[ALARM] CPU使用率 $cpu_usage% 超过阈值 $cpu_threshold%\033[0m" >&2
     fi
     if [ "$mem_exceed" -eq 1 ]; then
-        echo -e "\033[0;31m[ALARM] 内存使用率 $mem_used_percent% 超过阈值 $mem_threshold%\033[0m"
+        echo -e "\033[0;31m[ALARM] 内存使用率 $mem_used_percent% 超过阈值 $mem_threshold%\033[0m" >&2
     fi
+}
+
+generate_sample_json() {
+    local sample_num="$1"
+    local cpu_usage="$2"
+    local mem_used_percent="$3"
+    local mem_total="$4"
+    local mem_available="$5"
+    local indent="$6"
+    
+    printf '%s{\n' "$indent"
+    printf '%s    "sample_num": %s,\n' "$indent" "$sample_num"
+    printf '%s    "cpu_usage": %s,\n' "$indent" "$cpu_usage"
+    printf '%s    "memory_used_percent": %s,\n' "$indent" "$mem_used_percent"
+    printf '%s    "memory_total_kb": %s,\n' "$indent" "$mem_total"
+    printf '%s    "memory_available_kb": %s\n' "$indent" "$mem_available"
+    printf '%s}' "$indent"
+}
+
+generate_stat_json() {
+    local label="$1"
+    local mean="$2"
+    local max="$3"
+    local min="$4"
+    local fluctuation="$5"
+    local indent="$6"
+    
+    printf '%s{\n' "$indent"
+    printf '%s    "label": "%s",\n' "$indent" "$label"
+    printf '%s    "mean": %.2f,\n' "$indent" "$mean"
+    printf '%s    "max": %.2f,\n' "$indent" "$max"
+    printf '%s    "min": %.2f,\n' "$indent" "$min"
+    printf '%s    "fluctuation": %.2f\n' "$indent" "$fluctuation"
+    printf '%s}' "$indent"
 }
 
 main() {
@@ -541,7 +575,7 @@ main() {
     local mem_used_values=()
     local mem_total_values=()
     local mem_available_values=()
-    local samples_json=""
+    local -a sample_jsons=()
     
     if [ "$OUTPUT_FORMAT" = "text" ]; then
         echo "========================================"
@@ -597,12 +631,8 @@ main() {
         write_alarm_log "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "$os" "$server_id" "$CPU_THRESHOLD" "$MEM_THRESHOLD"
         
         if [ "$OUTPUT_FORMAT" = "json" ]; then
-            local sample_json="{\"sample_num\":$i,\"cpu_usage\":$cpu_usage,\"memory_used_percent\":$mem_used_percent,\"memory_total_kb\":$mem_total,\"memory_available_kb\":$mem_available}"
-            if [ -z "$samples_json" ]; then
-                samples_json="$sample_json"
-            else
-                samples_json="$samples_json,$sample_json"
-            fi
+            local sample_json=$(generate_sample_json "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "        ")
+            sample_jsons+=("$sample_json")
         else
             printf "%-6d %8s %10s %12d %15d\n" "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available"
         fi
@@ -615,37 +645,104 @@ main() {
     done
     
     if [ "$OUTPUT_FORMAT" = "json" ]; then
-        local cpu_stats=$(calculate_stats_json "CPU" "${cpu_values[@]}")
-        local mem_stats=$(calculate_stats_json "内存" "${mem_used_values[@]}")
+        local cpu_stats=$(printf "%s\n" "${cpu_values[@]}" | awk '
+        BEGIN {
+            min = 1000000000
+            max = -1000000000
+            sum = 0
+            count = 0
+        }
+        {
+            val = $1 + 0
+            if (val < min) min = val
+            if (val > max) max = val
+            sum += val
+            count++
+        }
+        END {
+            if (count > 0) {
+                mean = sum / count
+                fluctuation = max - min
+                printf "%.2f %.2f %.2f %.2f", mean, max, min, fluctuation
+            } else {
+                printf "0.00 0.00 0.00 0.00"
+            }
+        }
+        ')
+        
+        local mem_stats=$(printf "%s\n" "${mem_used_values[@]}" | awk '
+        BEGIN {
+            min = 1000000000
+            max = -1000000000
+            sum = 0
+            count = 0
+        }
+        {
+            val = $1 + 0
+            if (val < min) min = val
+            if (val > max) max = val
+            sum += val
+            count++
+        }
+        END {
+            if (count > 0) {
+                mean = sum / count
+                fluctuation = max - min
+                printf "%.2f %.2f %.2f %.2f", mean, max, min, fluctuation
+            } else {
+                printf "0.00 0.00 0.00 0.00"
+            }
+        }
+        ')
+        
+        local cpu_mean=$(echo "$cpu_stats" | awk '{print $1}')
+        local cpu_max=$(echo "$cpu_stats" | awk '{print $2}')
+        local cpu_min=$(echo "$cpu_stats" | awk '{print $3}')
+        local cpu_fluctuation=$(echo "$cpu_stats" | awk '{print $4}')
+        
+        local mem_mean=$(echo "$mem_stats" | awk '{print $1}')
+        local mem_max=$(echo "$mem_stats" | awk '{print $2}')
+        local mem_min=$(echo "$mem_stats" | awk '{print $3}')
+        local mem_fluctuation=$(echo "$mem_stats" | awk '{print $4}')
+        
+        local cpu_stat_json=$(generate_stat_json "CPU" "$cpu_mean" "$cpu_max" "$cpu_min" "$cpu_fluctuation" "        ")
+        local mem_stat_json=$(generate_stat_json "内存" "$mem_mean" "$mem_max" "$mem_min" "$mem_fluctuation" "        ")
         
         local escaped_os=$(escape_json_string "$os")
         local escaped_server_id=$(escape_json_string "$server_id")
         local escaped_log_dir=$(escape_json_string "$log_dir")
         local escaped_log_filename=$(escape_json_string "$log_filename")
         
-        cat << EOF
-{
-    "config": {
-        "sample_count": $SAMPLE_COUNT,
-        "sample_interval": $SAMPLE_INTERVAL,
-        "cpu_threshold": $CPU_THRESHOLD,
-        "memory_threshold": $MEM_THRESHOLD,
-        "alarm_enabled": "$ALARM_ENABLED"
-    },
-    "system_info": {
-        "os": "$escaped_os",
-        "server_id": "$escaped_server_id",
-        "alarm_log_file": "$escaped_log_dir/$escaped_log_filename"
-    },
-    "samples": [
-        $samples_json
-    ],
-    "statistics": [
-        $cpu_stats,
-        $mem_stats
-    ]
-}
-EOF
+        echo "{"
+        echo "    \"config\": {"
+        echo "        \"sample_count\": $SAMPLE_COUNT,"
+        echo "        \"sample_interval\": $SAMPLE_INTERVAL,"
+        echo "        \"cpu_threshold\": $CPU_THRESHOLD,"
+        echo "        \"memory_threshold\": $MEM_THRESHOLD,"
+        echo "        \"alarm_enabled\": \"$ALARM_ENABLED\""
+        echo "    },"
+        echo "    \"system_info\": {"
+        echo "        \"os\": \"$escaped_os\","
+        echo "        \"server_id\": \"$escaped_server_id\","
+        echo "        \"alarm_log_file\": \"$escaped_log_dir/$escaped_log_filename\""
+        echo "    },"
+        echo "    \"samples\": ["
+        
+        local sample_count=${#sample_jsons[@]}
+        for ((i=0; i<sample_count; i++)); do
+            if [ $i -lt $((sample_count - 1)) ]; then
+                echo "${sample_jsons[$i]},"
+            else
+                echo "${sample_jsons[$i]}"
+            fi
+        done
+        
+        echo "    ],"
+        echo "    \"statistics\": ["
+        echo "$cpu_stat_json,"
+        echo "$mem_stat_json"
+        echo "    ]"
+        echo "}"
     else
         echo "---------------------------------------------------------------"
         echo ""

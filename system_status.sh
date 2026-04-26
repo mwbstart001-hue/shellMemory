@@ -841,7 +841,7 @@ filter_alarms() {
     if [ ${#selected_list[@]} -eq 0 ]; then
         return 0
     fi
-    
+
     while IFS= read -r line; do
         [ -n "$line" ] && GLOBAL_FILTERED_ALARMS+=("$line")
     done < <(printf '%s\n' "${selected_list[@]}" | tail -r)
@@ -1101,18 +1101,13 @@ query_alarms() {
     done
     shift $((OPTIND -1))
     
-    local log_dir=$(get_alarm_log_dir)
-    local alt_log_dir="./logs"
+    local log_dir="./logs"
     
     GLOBAL_RAW_ALARMS=()
     GLOBAL_FILTERED_ALARMS=()
     
     if [ -d "$log_dir" ]; then
         parse_alarm_logs "$log_dir"
-    fi
-    
-    if [ -d "$alt_log_dir" ] && [ "$log_dir" != "$alt_log_dir" ]; then
-        parse_alarm_logs "$alt_log_dir"
     fi
     
     filter_alarms "$QUERY_DATE" "$QUERY_TYPE" "$QUERY_COUNT"

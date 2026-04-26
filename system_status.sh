@@ -1567,11 +1567,6 @@ main() {
         return $?
     fi
     
-    if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-        show_help
-        exit 0
-    fi
-    
     parse_args "$@"
     
     local os=$(get_os_type)

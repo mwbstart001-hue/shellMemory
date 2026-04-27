@@ -471,7 +471,224 @@ test_priority_logic() {
     echo "   - -n 覆盖 SAMPLE_COUNT"
     echo "   - -i 覆盖 SAMPLE_INTERVAL"
     echo "   - -f 覆盖 OUTPUT_FORMAT"
+    echo "   - -c 覆盖 CPU_THRESHOLD"
+    echo "   - -m 覆盖 MEM_THRESHOLD"
+    echo "   - -a 覆盖 ALARM_ENABLED"
     print_test_result "命令行参数覆盖逻辑正确" true
+}
+
+test_new_cli_options() {
+    print_header "测试 8: 新增命令行选项测试"
+    
+    echo ""
+    echo "测试主帮助信息包含新选项..."
+    local main_help
+    main_help=$(bash "$MAIN_SCRIPT" -h 2>&1)
+    
+    if echo "$main_help" | grep -q -- "-c 阈值"; then
+        print_test_result "主帮助包含 -c 选项说明" true
+    else
+        print_test_result "主帮助缺少 -c 选项说明" false
+    fi
+    
+    if echo "$main_help" | grep -q -- "-m 阈值"; then
+        print_test_result "主帮助包含 -m 选项说明" true
+    else
+        print_test_result "主帮助缺少 -m 选项说明" false
+    fi
+    
+    if echo "$main_help" | grep -q -- "-a true/false"; then
+        print_test_result "主帮助包含 -a 选项说明" true
+    else
+        print_test_result "主帮助缺少 -a 选项说明" false
+    fi
+    
+    echo ""
+    echo "测试主帮助包含新选项示例..."
+    
+    if echo "$main_help" | grep -q -- "-c 90.0 -m 85.0"; then
+        print_test_result "主帮助包含 -c/-m 组合示例" true
+    else
+        print_test_result "主帮助缺少 -c/-m 组合示例" false
+    fi
+    
+    if echo "$main_help" | grep -q -- "-a false"; then
+        print_test_result "主帮助包含 -a false 示例" true
+    else
+        print_test_result "主帮助缺少 -a false 示例" false
+    fi
+    
+    echo ""
+    echo "测试 -c 选项 (CPU_THRESHOLD)..."
+    
+    echo "  测试 -c 有效数值 (90.0)..."
+    local help_c
+    help_c=$(bash "$MAIN_SCRIPT" -c 90.0 -h 2>&1)
+    local exit_c=$?
+    
+    if [ $exit_c -eq 0 ]; then
+        print_test_result "-c 90.0 执行成功 (退出码: 0)" true
+    else
+        print_test_result "-c 90.0 执行失败 (退出码: $exit_c)" false
+    fi
+    
+    echo "  测试 -c 无效数值 (abc)..."
+    local help_c_invalid
+    help_c_invalid=$(bash "$MAIN_SCRIPT" -c abc -h 2>&1)
+    local exit_c_invalid=$?
+    
+    if [ $exit_c_invalid -ne 0 ]; then
+        print_test_result "-c abc 正确返回非零退出码 ($exit_c_invalid)" true
+    else
+        print_test_result "-c abc 应该返回非零退出码 (实际: $exit_c_invalid)" false
+    fi
+    
+    if echo "$help_c_invalid" | grep -q "CPU阈值"; then
+        print_test_result "-c abc 输出包含 'CPU阈值' 错误提示" true
+    else
+        print_test_result "-c abc 输出缺少 'CPU阈值' 错误提示" false
+    fi
+    
+    echo ""
+    echo "测试 -m 选项 (MEM_THRESHOLD)..."
+    
+    echo "  测试 -m 有效数值 (85.5)..."
+    local help_m
+    help_m=$(bash "$MAIN_SCRIPT" -m 85.5 -h 2>&1)
+    local exit_m=$?
+    
+    if [ $exit_m -eq 0 ]; then
+        print_test_result "-m 85.5 执行成功 (退出码: 0)" true
+    else
+        print_test_result "-m 85.5 执行失败 (退出码: $exit_m)" false
+    fi
+    
+    echo "  测试 -m 无效数值 (xyz)..."
+    local help_m_invalid
+    help_m_invalid=$(bash "$MAIN_SCRIPT" -m xyz -h 2>&1)
+    local exit_m_invalid=$?
+    
+    if [ $exit_m_invalid -ne 0 ]; then
+        print_test_result "-m xyz 正确返回非零退出码 ($exit_m_invalid)" true
+    else
+        print_test_result "-m xyz 应该返回非零退出码 (实际: $exit_m_invalid)" false
+    fi
+    
+    if echo "$help_m_invalid" | grep -q "内存阈值"; then
+        print_test_result "-m xyz 输出包含 '内存阈值' 错误提示" true
+    else
+        print_test_result "-m xyz 输出缺少 '内存阈值' 错误提示" false
+    fi
+    
+    echo ""
+    echo "测试 -a 选项 (ALARM_ENABLED)..."
+    
+    local valid_values=("true" "false" "TRUE" "FALSE" "yes" "no" "YES" "NO" "1" "0")
+    
+    for value in "${valid_values[@]}"; do
+        echo "  测试 -a $value (有效值)..."
+        local help_a
+        help_a=$(bash "$MAIN_SCRIPT" -a "$value" -h 2>&1)
+        local exit_a=$?
+        
+        if [ $exit_a -eq 0 ]; then
+            print_test_result "-a $value 执行成功 (退出码: 0)" true
+        else
+            print_test_result "-a $value 执行失败 (退出码: $exit_a)" false
+        fi
+    done
+    
+    echo ""
+    echo "  测试 -a invalid (无效值)..."
+    local help_a_invalid
+    help_a_invalid=$(bash "$MAIN_SCRIPT" -a invalid -h 2>&1)
+    local exit_a_invalid=$?
+    
+    if [ $exit_a_invalid -ne 0 ]; then
+        print_test_result "-a invalid 正确返回非零退出码 ($exit_a_invalid)" true
+    else
+        print_test_result "-a invalid 应该返回非零退出码 (实际: $exit_a_invalid)" false
+    fi
+    
+    if echo "$help_a_invalid" | grep -q "告警启用"; then
+        print_test_result "-a invalid 输出包含 '告警启用' 错误提示" true
+    else
+        print_test_result "-a invalid 输出缺少 '告警启用' 错误提示" false
+    fi
+    
+    echo ""
+    echo "测试 -c -m -a 空参数 (缺少参数)..."
+    
+    echo "  测试 -c 空参数..."
+    local help_c_missing
+    help_c_missing=$(bash "$MAIN_SCRIPT" -c 2>&1)
+    local exit_c_missing=$?
+    
+    if [ $exit_c_missing -ne 0 ]; then
+        print_test_result "-c (空参数) 正确返回非零退出码 ($exit_c_missing)" true
+    else
+        print_test_result "-c (空参数) 应该返回非零退出码 (实际: $exit_c_missing)" false
+    fi
+    
+    echo "  测试 -m 空参数..."
+    local help_m_missing
+    help_m_missing=$(bash "$MAIN_SCRIPT" -m 2>&1)
+    local exit_m_missing=$?
+    
+    if [ $exit_m_missing -ne 0 ]; then
+        print_test_result "-m (空参数) 正确返回非零退出码 ($exit_m_missing)" true
+    else
+        print_test_result "-m (空参数) 应该返回非零退出码 (实际: $exit_m_missing)" false
+    fi
+    
+    echo "  测试 -a 空参数..."
+    local help_a_missing
+    help_a_missing=$(bash "$MAIN_SCRIPT" -a 2>&1)
+    local exit_a_missing=$?
+    
+    if [ $exit_a_missing -ne 0 ]; then
+        print_test_result "-a (空参数) 正确返回非零退出码 ($exit_a_missing)" true
+    else
+        print_test_result "-a (空参数) 应该返回非零退出码 (实际: $exit_a_missing)" false
+    fi
+    
+    echo ""
+    echo "测试组合选项 (-c -m -a 一起使用)..."
+    
+    echo "  测试 -c 90 -m 85 -a true 组合..."
+    local help_combined
+    help_combined=$(bash "$MAIN_SCRIPT" -c 90 -m 85 -a true -h 2>&1)
+    local exit_combined=$?
+    
+    if [ $exit_combined -eq 0 ]; then
+        print_test_result "-c 90 -m 85 -a true 组合执行成功 (退出码: 0)" true
+    else
+        print_test_result "-c 90 -m 85 -a true 组合执行失败 (退出码: $exit_combined)" false
+    fi
+    
+    echo "  测试 -c 75.5 -m 70.0 -a false 组合..."
+    local help_combined2
+    help_combined2=$(bash "$MAIN_SCRIPT" -c 75.5 -m 70.0 -a false -h 2>&1)
+    local exit_combined2=$?
+    
+    if [ $exit_combined2 -eq 0 ]; then
+        print_test_result "-c 75.5 -m 70.0 -a false 组合执行成功 (退出码: 0)" true
+    else
+        print_test_result "-c 75.5 -m 70.0 -a false 组合执行失败 (退出码: $exit_combined2)" false
+    fi
+    
+    echo ""
+    echo "测试所有选项一起使用 (-n -i -f -c -m -a)..."
+    
+    local help_all
+    help_all=$(bash "$MAIN_SCRIPT" -n 10 -i 2 -f json -c 90 -m 85 -a true -h 2>&1)
+    local exit_all=$?
+    
+    if [ $exit_all -eq 0 ]; then
+        print_test_result "所有选项组合执行成功 (退出码: 0)" true
+    else
+        print_test_result "所有选项组合执行失败 (退出码: $exit_all)" false
+    fi
 }
 
 main() {
@@ -499,6 +716,9 @@ main() {
     echo ""
     
     test_priority_logic
+    echo ""
+    
+    test_new_cli_options
     echo ""
     
     cleanup_test_dir

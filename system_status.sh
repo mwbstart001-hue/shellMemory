@@ -304,6 +304,7 @@ show_help() {
     -f 格式      设置输出格式 (text/json, 默认: text)
     -c 阈值      设置CPU告警阈值，百分比 (默认: 80.0)
     -m 阈值      设置内存告警阈值，百分比 (默认: 80.0)
+    -k 阈值      设置磁盘告警阈值，百分比 (默认: 80.0)
     -a true/false 设置是否启用告警 (默认: true)
     -h, --help   显示此帮助信息
 
@@ -338,18 +339,20 @@ show_help() {
         OUTPUT_FORMAT     输出格式: text/json (默认: text)
         CPU_THRESHOLD     CPU告警阈值，百分比 (默认: 80.0)
         MEM_THRESHOLD     内存告警阈值，百分比 (默认: 80.0)
+        DISK_THRESHOLD    磁盘告警阈值，百分比 (默认: 80.0)
         ALARM_ENABLED     是否启用告警: true/false (默认: true)
 
     支持的环境变量 (可选，优先级高于配置文件):
         ENV_SAMPLE_COUNT, ENV_SAMPLE_INTERVAL, ENV_OUTPUT_FORMAT
-        ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_ALARM_ENABLED
+        ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_DISK_THRESHOLD, ENV_ALARM_ENABLED
 
 示例:
     $0 -n 10 -i 2          采样10次，间隔2秒，文本格式输出
     $0 -n 5 -i 1 -f json   采样5次，间隔1秒，JSON格式输出
     $0 -c 90.0 -m 85.0     设置CPU阈值90%，内存阈值85%
+    $0 -k 90.0              设置磁盘阈值90%
     $0 -a false             禁用告警功能
-    $0 -c 70 -m 70 -a true  自定义阈值并启用告警
+    $0 -c 70 -m 70 -k 70 -a true  自定义所有阈值并启用告警
     
     $0 query -n 20          查询最近20条告警记录
     $0 query -d 2026-04-26 查询指定日期的告警记录
@@ -368,7 +371,7 @@ EOF
 }
 
 parse_args() {
-    while getopts ":n:i:f:c:m:a:h-" opt; do
+    while getopts ":n:i:f:c:m:k:a:h-" opt; do
         case $opt in
             n)
                 if ! is_number "$OPTARG"; then
@@ -408,6 +411,13 @@ parse_args() {
                     exit 1
                 fi
                 MEM_THRESHOLD=$OPTARG
+                ;;
+            k)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: 磁盘阈值必须是有效的数字"
+                    exit 1
+                fi
+                DISK_THRESHOLD=$OPTARG
                 ;;
             a)
                 local lower_value=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')

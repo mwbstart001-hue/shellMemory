@@ -282,6 +282,9 @@ show_help() {
     -n 次数      设置采样次数 (默认: 5)
     -i 秒数      设置采样间隔时间 (默认: 1秒)
     -f 格式      设置输出格式 (text/json, 默认: text)
+    -c 阈值      设置CPU告警阈值，百分比 (默认: 80.0)
+    -m 阈值      设置内存告警阈值，百分比 (默认: 80.0)
+    -a true/false 设置是否启用告警 (默认: true)
     -h, --help   显示此帮助信息
 
 查询选项 (与 query 子命令配合使用):
@@ -324,6 +327,9 @@ show_help() {
 示例:
     $0 -n 10 -i 2          采样10次，间隔2秒，文本格式输出
     $0 -n 5 -i 1 -f json   采样5次，间隔1秒，JSON格式输出
+    $0 -c 90.0 -m 85.0     设置CPU阈值90%，内存阈值85%
+    $0 -a false             禁用告警功能
+    $0 -c 70 -m 70 -a true  自定义阈值并启用告警
     
     $0 query -n 20          查询最近20条告警记录
     $0 query -d 2026-04-26 查询指定日期的告警记录
@@ -342,7 +348,7 @@ EOF
 }
 
 parse_args() {
-    while getopts ":n:i:f:h-" opt; do
+    while getopts ":n:i:f:c:m:a:h-" opt; do
         case $opt in
             n)
                 if ! is_number "$OPTARG"; then
@@ -368,6 +374,31 @@ parse_args() {
                         exit 1
                         ;;
                 esac
+                ;;
+            c)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: CPU阈值必须是有效的数字"
+                    exit 1
+                fi
+                CPU_THRESHOLD=$OPTARG
+                ;;
+            m)
+                if ! is_number "$OPTARG"; then
+                    echo "错误: 内存阈值必须是有效的数字"
+                    exit 1
+                fi
+                MEM_THRESHOLD=$OPTARG
+                ;;
+            a)
+                local lower_value=$(echo "$OPTARG" | tr '[:upper:]' '[:lower:]')
+                if [ "$lower_value" = "true" ] || [ "$lower_value" = "1" ] || [ "$lower_value" = "yes" ]; then
+                    ALARM_ENABLED="true"
+                elif [ "$lower_value" = "false" ] || [ "$lower_value" = "0" ] || [ "$lower_value" = "no" ]; then
+                    ALARM_ENABLED="false"
+                else
+                    echo "错误: 告警启用选项只能是 'true', 'false', 'yes', 'no', '1', '0'"
+                    exit 1
+                fi
                 ;;
             h)
                 show_help

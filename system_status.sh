@@ -1,5 +1,262 @@
 #!/bin/bash
 
+DEFAULT_SAMPLE_COUNT=5
+DEFAULT_SAMPLE_INTERVAL=1
+DEFAULT_OUTPUT_FORMAT="text"
+DEFAULT_CPU_THRESHOLD=80.0
+DEFAULT_MEM_THRESHOLD=80.0
+DEFAULT_ALARM_ENABLED=true
+
+init_defaults() {
+    SAMPLE_COUNT=$DEFAULT_SAMPLE_COUNT
+    SAMPLE_INTERVAL=$DEFAULT_SAMPLE_INTERVAL
+    OUTPUT_FORMAT=$DEFAULT_OUTPUT_FORMAT
+    CPU_THRESHOLD=$DEFAULT_CPU_THRESHOLD
+    MEM_THRESHOLD=$DEFAULT_MEM_THRESHOLD
+    ALARM_ENABLED=$DEFAULT_ALARM_ENABLED
+}
+
+load_config() {
+    local config_file=""
+    
+    if [ -f "./monitor.conf" ]; then
+        config_file="./monitor.conf"
+    elif [ -f "$HOME/.monitor.conf" ]; then
+        config_file="$HOME/.monitor.conf"
+    fi
+    
+    if [ -n "$config_file" ]; then
+        local line
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            if [ -z "$line" ] || [[ "$line" =~ ^# ]]; then
+                continue
+            fi
+            
+            if [[ "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+                local key="${BASH_REMATCH[1]}"
+                local value="${BASH_REMATCH[2]}"
+                
+                value=$(echo "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                value=$(echo "$value" | sed 's/^"//;s/"$//')
+                value=$(echo "$value" | sed "s/^'//;s/'$//")
+                
+                case "$key" in
+                    SAMPLE_COUNT)
+                        if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
+                            SAMPLE_COUNT="$value"
+                        fi
+                        ;;
+                    SAMPLE_INTERVAL)
+                        if [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                            SAMPLE_INTERVAL="$value"
+                        fi
+                        ;;
+                    OUTPUT_FORMAT)
+                        if [ "$value" = "text" ] || [ "$value" = "json" ]; then
+                            OUTPUT_FORMAT="$value"
+                        fi
+                        ;;
+                    CPU_THRESHOLD)
+                        if [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                            CPU_THRESHOLD="$value"
+                        fi
+                        ;;
+                    MEM_THRESHOLD)
+                        if [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                            MEM_THRESHOLD="$value"
+                        fi
+                        ;;
+                    ALARM_ENABLED)
+                        local lower_value=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+                        if [ "$lower_value" = "true" ] || [ "$lower_value" = "1" ] || [ "$lower_value" = "yes" ]; then
+                            ALARM_ENABLED="true"
+                        elif [ "$lower_value" = "false" ] || [ "$lower_value" = "0" ] || [ "$lower_value" = "no" ]; then
+                            ALARM_ENABLED="false"
+                        fi
+                        ;;
+                esac
+            fi
+        done < "$config_file"
+    fi
+}
+
+apply_env_overrides() {
+    if [ -n "${ENV_SAMPLE_COUNT:-}" ]; then
+        if [[ "$ENV_SAMPLE_COUNT" =~ ^[0-9]+$ ]] && [ "$ENV_SAMPLE_COUNT" -gt 0 ]; then
+            SAMPLE_COUNT="$ENV_SAMPLE_COUNT"
+        fi
+    fi
+    
+    if [ -n "${ENV_SAMPLE_INTERVAL:-}" ]; then
+        if [[ "$ENV_SAMPLE_INTERVAL" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            SAMPLE_INTERVAL="$ENV_SAMPLE_INTERVAL"
+        fi
+    fi
+    
+    if [ -n "${ENV_OUTPUT_FORMAT:-}" ]; then
+        if [ "$ENV_OUTPUT_FORMAT" = "text" ] || [ "$ENV_OUTPUT_FORMAT" = "json" ]; then
+            OUTPUT_FORMAT="$ENV_OUTPUT_FORMAT"
+        fi
+    fi
+    
+    if [ -n "${ENV_CPU_THRESHOLD:-}" ]; then
+        if [[ "$ENV_CPU_THRESHOLD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            CPU_THRESHOLD="$ENV_CPU_THRESHOLD"
+        fi
+    fi
+    
+    if [ -n "${ENV_MEM_THRESHOLD:-}" ]; then
+        if [[ "$ENV_MEM_THRESHOLD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            MEM_THRESHOLD="$ENV_MEM_THRESHOLD"
+        fi
+    fi
+    
+    if [ -n "${ENV_ALARM_ENABLED:-}" ]; then
+        local lower_value=$(echo "$ENV_ALARM_ENABLED" | tr '[:upper:]' '[:lower:]')
+        if [ "$lower_value" = "true" ] || [ "$lower_value" = "1" ] || [ "$lower_value" = "yes" ]; then
+            ALARM_ENABLED="true"
+        elif [ "$lower_value" = "false" ] || [ "$lower_value" = "0" ] || [ "$lower_value" = "no" ]; then
+            ALARM_ENABLED="false"
+        fi
+    fi
+}
+
+show_config_help() {
+    cat << EOF
+用法: $0 config <子命令> [选项]
+
+配置文件管理子命令。
+
+子命令:
+    init        在当前目录生成 monitor.conf 配置模板文件
+
+示例:
+    $0 config init              生成配置模板文件
+
+配置文件加载优先级:
+    1. ./monitor.conf (项目级，当前目录)
+    2. ~/.monitor.conf (用户级，主目录)
+
+配置文件格式:
+    # 采样配置
+    SAMPLE_COUNT=5           # 采样次数 (默认: 5)
+    SAMPLE_INTERVAL=1        # 采样间隔，单位秒 (默认: 1)
+    OUTPUT_FORMAT=text       # 输出格式: text/json (默认: text)
+    
+    # 告警阈值配置
+    CPU_THRESHOLD=80.0       # CPU使用率告警阈值，百分比 (默认: 80.0)
+    MEM_THRESHOLD=80.0       # 内存使用率告警阈值，百分比 (默认: 80.0)
+    ALARM_ENABLED=true       # 是否启用告警: true/false (默认: true)
+
+配置优先级 (后者覆盖前者):
+    配置文件 -> 环境变量 -> 命令行参数
+
+环境变量名 (可选):
+    ENV_SAMPLE_COUNT, ENV_SAMPLE_INTERVAL, ENV_OUTPUT_FORMAT
+    ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_ALARM_ENABLED
+EOF
+}
+
+config_init() {
+    local config_file="./monitor.conf"
+    
+    if [ -f "$config_file" ]; then
+        echo "错误: 配置文件 '$config_file' 已存在" >&2
+        echo "如需重新生成，请先删除现有文件" >&2
+        return 1
+    fi
+    
+    cat > "$config_file" << 'EOF'
+# ========================================
+# 系统状态监控脚本 - 配置文件
+# ========================================
+# 
+# 配置优先级 (后者覆盖前者):
+#   配置文件 -> 环境变量 -> 命令行参数
+#
+# 配置文件加载优先级:
+#   1. ./monitor.conf (项目级，当前目录)
+#   2. ~/.monitor.conf (用户级，主目录)
+# ========================================
+
+# ========================================
+# 采样配置
+# ========================================
+
+# 采样次数
+# 每次运行脚本时执行多少次采样
+# 默认值: 5
+SAMPLE_COUNT=5
+
+# 采样间隔
+# 两次采样之间的等待时间，单位秒
+# 默认值: 1
+SAMPLE_INTERVAL=1
+
+# 输出格式
+# 可选值: text, json
+# 默认值: text
+OUTPUT_FORMAT=text
+
+# ========================================
+# 告警阈值配置
+# ========================================
+
+# CPU使用率告警阈值
+# 当CPU使用率超过此值时触发告警，单位百分比
+# 默认值: 80.0
+CPU_THRESHOLD=80.0
+
+# 内存使用率告警阈值
+# 当内存使用率超过此值时触发告警，单位百分比
+# 默认值: 80.0
+MEM_THRESHOLD=80.0
+
+# 是否启用告警
+# 可选值: true, false, yes, no, 1, 0
+# 默认值: true
+ALARM_ENABLED=true
+
+# ========================================
+# 配置说明
+# ========================================
+# 
+# 支持的环境变量 (可选，优先级高于配置文件):
+#   ENV_SAMPLE_COUNT   - 覆盖 SAMPLE_COUNT
+#   ENV_SAMPLE_INTERVAL - 覆盖 SAMPLE_INTERVAL
+#   ENV_OUTPUT_FORMAT  - 覆盖 OUTPUT_FORMAT
+#   ENV_CPU_THRESHOLD  - 覆盖 CPU_THRESHOLD
+#   ENV_MEM_THRESHOLD  - 覆盖 MEM_THRESHOLD
+#   ENV_ALARM_ENABLED  - 覆盖 ALARM_ENABLED
+#
+# 命令行参数优先级最高:
+#   -n <次数>  - 覆盖采样次数
+#   -i <秒数>  - 覆盖采样间隔
+#   -f <格式>  - 覆盖输出格式
+# ========================================
+EOF
+    
+    if [ $? -eq 0 ]; then
+        echo "配置模板已生成: $config_file"
+        echo ""
+        echo "配置说明:"
+        echo "  - 请根据需要修改配置值"
+        echo "  - 以 # 开头的行是注释"
+        echo "  - 配置格式: KEY=VALUE"
+        echo ""
+        echo "示例:"
+        echo "  SAMPLE_COUNT=10"
+        echo "  CPU_THRESHOLD=90.0"
+        echo "  OUTPUT_FORMAT=json"
+        return 0
+    else
+        echo "错误: 无法创建配置文件 '$config_file'" >&2
+        return 1
+    fi
+}
+
 SAMPLE_COUNT=5
 SAMPLE_INTERVAL=1
 OUTPUT_FORMAT="text"
@@ -18,6 +275,7 @@ show_help() {
 子命令:
     query       查询告警历史记录
     stats       按天统计告警频率
+    config      配置文件管理
     (无)       执行系统状态监控（默认行为）
 
 监控选项:
@@ -39,6 +297,30 @@ show_help() {
     -f 格式      输出格式 (text/json, 默认: text)
     -h, --help   显示统计子命令帮助
 
+配置管理选项:
+    config init  在当前目录生成 monitor.conf 配置模板文件
+    config help  显示配置管理帮助信息
+
+配置文件说明:
+    加载优先级 (找到第一个即停止):
+        1. ./monitor.conf      (项目级，当前目录)
+        2. ~/.monitor.conf     (用户级，主目录)
+
+    配置优先级 (后者覆盖前者):
+        配置文件 -> 环境变量 -> 命令行参数
+
+    支持的配置字段:
+        SAMPLE_COUNT      采样次数 (默认: 5)
+        SAMPLE_INTERVAL   采样间隔，单位秒 (默认: 1)
+        OUTPUT_FORMAT     输出格式: text/json (默认: text)
+        CPU_THRESHOLD     CPU告警阈值，百分比 (默认: 80.0)
+        MEM_THRESHOLD     内存告警阈值，百分比 (默认: 80.0)
+        ALARM_ENABLED     是否启用告警: true/false (默认: true)
+
+    支持的环境变量 (可选，优先级高于配置文件):
+        ENV_SAMPLE_COUNT, ENV_SAMPLE_INTERVAL, ENV_OUTPUT_FORMAT
+        ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_ALARM_ENABLED
+
 示例:
     $0 -n 10 -i 2          采样10次，间隔2秒，文本格式输出
     $0 -n 5 -i 1 -f json   采样5次，间隔1秒，JSON格式输出
@@ -53,6 +335,9 @@ show_help() {
     $0 stats -d 30          统计最近30天告警频率
     $0 stats -t cpu         统计最近7天CPU告警频率
     $0 stats -d 14 -f json  统计最近14天告警频率并以JSON格式输出
+    
+    $0 config init          生成配置模板文件
+    $0 config help          显示配置管理帮助信息
 EOF
 }
 
@@ -1557,6 +1842,23 @@ stats_alarms() {
 }
 
 main() {
+    if [ "$1" = "config" ]; then
+        shift
+        if [ "$1" = "init" ]; then
+            config_init
+            return $?
+        elif [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+            show_config_help
+            return 0
+        else
+            if [ -n "$1" ]; then
+                echo "错误: 未知的 config 子命令: $1" >&2
+            fi
+            show_config_help
+            return 1
+        fi
+    fi
+    
     if [ "$1" = "query" ]; then
         query_alarms "$@"
         return $?
@@ -1566,6 +1868,10 @@ main() {
         stats_alarms "$@"
         return $?
     fi
+    
+    init_defaults
+    load_config
+    apply_env_overrides
     
     parse_args "$@"
     

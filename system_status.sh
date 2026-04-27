@@ -5,6 +5,7 @@ DEFAULT_SAMPLE_INTERVAL=1
 DEFAULT_OUTPUT_FORMAT="text"
 DEFAULT_CPU_THRESHOLD=80.0
 DEFAULT_MEM_THRESHOLD=80.0
+DEFAULT_DISK_THRESHOLD=80.0
 DEFAULT_ALARM_ENABLED=true
 
 init_defaults() {
@@ -13,6 +14,7 @@ init_defaults() {
     OUTPUT_FORMAT=$DEFAULT_OUTPUT_FORMAT
     CPU_THRESHOLD=$DEFAULT_CPU_THRESHOLD
     MEM_THRESHOLD=$DEFAULT_MEM_THRESHOLD
+    DISK_THRESHOLD=$DEFAULT_DISK_THRESHOLD
     ALARM_ENABLED=$DEFAULT_ALARM_ENABLED
 }
 
@@ -68,6 +70,11 @@ load_config() {
                             MEM_THRESHOLD="$value"
                         fi
                         ;;
+                    DISK_THRESHOLD)
+                        if [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                            DISK_THRESHOLD="$value"
+                        fi
+                        ;;
                     ALARM_ENABLED)
                         local lower_value=$(echo "$value" | tr '[:upper:]' '[:lower:]')
                         if [ "$lower_value" = "true" ] || [ "$lower_value" = "1" ] || [ "$lower_value" = "yes" ]; then
@@ -113,6 +120,12 @@ apply_env_overrides() {
         fi
     fi
     
+    if [ -n "${ENV_DISK_THRESHOLD:-}" ]; then
+        if [[ "$ENV_DISK_THRESHOLD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            DISK_THRESHOLD="$ENV_DISK_THRESHOLD"
+        fi
+    fi
+    
     if [ -n "${ENV_ALARM_ENABLED:-}" ]; then
         local lower_value=$(echo "$ENV_ALARM_ENABLED" | tr '[:upper:]' '[:lower:]')
         if [ "$lower_value" = "true" ] || [ "$lower_value" = "1" ] || [ "$lower_value" = "yes" ]; then
@@ -148,6 +161,7 @@ show_config_help() {
     # 告警阈值配置
     CPU_THRESHOLD=80.0       # CPU使用率告警阈值，百分比 (默认: 80.0)
     MEM_THRESHOLD=80.0       # 内存使用率告警阈值，百分比 (默认: 80.0)
+    DISK_THRESHOLD=80.0      # 磁盘使用率告警阈值，百分比 (默认: 80.0)
     ALARM_ENABLED=true       # 是否启用告警: true/false (默认: true)
 
 配置优先级 (后者覆盖前者):
@@ -155,7 +169,7 @@ show_config_help() {
 
 环境变量名 (可选):
     ENV_SAMPLE_COUNT, ENV_SAMPLE_INTERVAL, ENV_OUTPUT_FORMAT
-    ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_ALARM_ENABLED
+    ENV_CPU_THRESHOLD, ENV_MEM_THRESHOLD, ENV_DISK_THRESHOLD, ENV_ALARM_ENABLED
 EOF
 }
 
@@ -214,6 +228,11 @@ CPU_THRESHOLD=80.0
 # 默认值: 80.0
 MEM_THRESHOLD=80.0
 
+# 磁盘使用率告警阈值
+# 当磁盘使用率超过此值时触发告警，单位百分比
+# 默认值: 80.0
+DISK_THRESHOLD=80.0
+
 # 是否启用告警
 # 可选值: true, false, yes, no, 1, 0
 # 默认值: true
@@ -229,6 +248,7 @@ ALARM_ENABLED=true
 #   ENV_OUTPUT_FORMAT  - 覆盖 OUTPUT_FORMAT
 #   ENV_CPU_THRESHOLD  - 覆盖 CPU_THRESHOLD
 #   ENV_MEM_THRESHOLD  - 覆盖 MEM_THRESHOLD
+#   ENV_DISK_THRESHOLD - 覆盖 DISK_THRESHOLD
 #   ENV_ALARM_ENABLED  - 覆盖 ALARM_ENABLED
 #
 # 命令行参数优先级最高:
@@ -720,6 +740,109 @@ get_memory_info() {
     esac
 }
 
+get_disk_usage_linux() {
+    local df_output=$(df -k / 2>/dev/null | tail -n 1)
+    
+    if [ -z "$df_output" ]; then
+        echo "0.00 0 0"
+        return
+    fi
+    
+    local total=$(echo "$df_output" | awk '{print $2}')
+    local used=$(echo "$df_output" | awk '{print $3}')
+    local available=$(echo "$df_output" | awk '{print $4}')
+    
+    if [ -z "$total" ] || [[ "$total" =~ [^0-9] ]]; then
+        total=0
+    fi
+    if [ -z "$available" ] || [[ "$available" =~ [^0-9] ]]; then
+        available=0
+    fi
+    
+    local disk_used_percent=$(awk -v total="$total" -v available="$available" 'BEGIN {
+        if (total > 0) {
+            used = total - available
+            printf "%.2f %d %d", 100.0 * used / total, total, available
+        } else {
+            printf "0.00 0 0"
+        }
+    }')
+    
+    echo "$disk_used_percent"
+}
+
+get_disk_usage_macos() {
+    local df_output=$(df -k / 2>/dev/null | tail -n 1)
+    
+    if [ -z "$df_output" ]; then
+        echo "0.00 0 0"
+        return
+    fi
+    
+    local total=$(echo "$df_output" | awk '{print $2}')
+    local used=$(echo "$df_output" | awk '{print $3}')
+    local available=$(echo "$df_output" | awk '{print $4}')
+    
+    if [ -z "$total" ] || [[ "$total" =~ [^0-9] ]]; then
+        total=0
+    fi
+    if [ -z "$available" ] || [[ "$available" =~ [^0-9] ]]; then
+        available=0
+    fi
+    
+    local disk_used_percent=$(awk -v total="$total" -v available="$available" 'BEGIN {
+        if (total > 0) {
+            used = total - available
+            printf "%.2f %d %d", 100.0 * used / total, total, available
+        } else {
+            printf "0.00 0 0"
+        }
+    }')
+    
+    echo "$disk_used_percent"
+}
+
+get_disk_usage_windows() {
+    local df_output=$(df -k / 2>/dev/null | tail -n 1)
+    
+    if [ -z "$df_output" ]; then
+        echo "0.00 0 0"
+        return
+    fi
+    
+    local total=$(echo "$df_output" | awk '{print $2}')
+    local used=$(echo "$df_output" | awk '{print $3}')
+    local available=$(echo "$df_output" | awk '{print $4}')
+    
+    if [ -z "$total" ] || [[ "$total" =~ [^0-9] ]]; then
+        total=0
+    fi
+    if [ -z "$available" ] || [[ "$available" =~ [^0-9] ]]; then
+        available=0
+    fi
+    
+    local disk_used_percent=$(awk -v total="$total" -v available="$available" 'BEGIN {
+        if (total > 0) {
+            used = total - available
+            printf "%.2f %d %d", 100.0 * used / total, total, available
+        } else {
+            printf "0.00 0 0"
+        }
+    }')
+    
+    echo "$disk_used_percent"
+}
+
+get_disk_usage() {
+    local os=$(get_os_type)
+    case "$os" in
+        linux)   get_disk_usage_linux ;;
+        macos)   get_disk_usage_macos ;;
+        windows) get_disk_usage_windows ;;
+        *)       echo "0.00 0 0" ;;
+    esac
+}
+
 calculate_stats() {
     local label=$1
     shift
@@ -816,6 +939,10 @@ write_alarm_log() {
     local server_id="$7"
     local cpu_threshold="$8"
     local mem_threshold="$9"
+    local disk_used_percent="${10}"
+    local disk_total="${11}"
+    local disk_available="${12}"
+    local disk_threshold="${13}"
     
     if [ "$ALARM_ENABLED" != "true" ]; then
         return
@@ -823,8 +950,12 @@ write_alarm_log() {
     
     local cpu_exceed=$(check_threshold "$cpu_usage" "$cpu_threshold")
     local mem_exceed=$(check_threshold "$mem_used_percent" "$mem_threshold")
+    local disk_exceed=0
+    if [ -n "$disk_used_percent" ] && [ -n "$disk_threshold" ]; then
+        disk_exceed=$(check_threshold "$disk_used_percent" "$disk_threshold")
+    fi
     
-    if [ "$cpu_exceed" -eq 0 ] && [ "$mem_exceed" -eq 0 ]; then
+    if [ "$cpu_exceed" -eq 0 ] && [ "$mem_exceed" -eq 0 ] && [ "$disk_exceed" -eq 0 ]; then
         return
     fi
     
@@ -854,13 +985,25 @@ write_alarm_log() {
         mem_alarm_msg="[ALARM] 内存=$mem_used_percent% (阈值=$mem_threshold%)"
     fi
     
+    local disk_alarm_msg=""
+    if [ "$disk_exceed" -eq 1 ]; then
+        disk_alarm_msg="[ALARM] 磁盘=$disk_used_percent% (阈值=$disk_threshold%)"
+    fi
+    
     local log_entry="[$timestamp] [$week_year] [采样=$sample_num] [ServerID=$server_id] [OS=$os] 总内存=${mem_total}KB 可用内存=${mem_available}KB"
+    
+    if [ -n "$disk_total" ] && [ "$disk_total" != "0" ]; then
+        log_entry="$log_entry 总磁盘=${disk_total}KB 可用磁盘=${disk_available}KB"
+    fi
     
     if [ -n "$cpu_alarm_msg" ]; then
         log_entry="$log_entry $cpu_alarm_msg"
     fi
     if [ -n "$mem_alarm_msg" ]; then
         log_entry="$log_entry $mem_alarm_msg"
+    fi
+    if [ -n "$disk_alarm_msg" ]; then
+        log_entry="$log_entry $disk_alarm_msg"
     fi
     
     echo "$log_entry" >> "$log_file" 2>/dev/null
@@ -871,6 +1014,9 @@ write_alarm_log() {
     if [ "$mem_exceed" -eq 1 ]; then
         echo -e "\033[0;31m[ALARM] 内存使用率 $mem_used_percent% 超过阈值 $mem_threshold%\033[0m" >&2
     fi
+    if [ "$disk_exceed" -eq 1 ]; then
+        echo -e "\033[0;31m[ALARM] 磁盘使用率 $disk_used_percent% 超过阈值 $disk_threshold%\033[0m" >&2
+    fi
 }
 
 generate_sample_json() {
@@ -879,14 +1025,20 @@ generate_sample_json() {
     local mem_used_percent="$3"
     local mem_total="$4"
     local mem_available="$5"
-    local indent="$6"
+    local disk_used_percent="$6"
+    local disk_total="$7"
+    local disk_available="$8"
+    local indent="$9"
     
     printf '%s{\n' "$indent"
     printf '%s    "sample_num": %s,\n' "$indent" "$sample_num"
     printf '%s    "cpu_usage": %s,\n' "$indent" "$cpu_usage"
     printf '%s    "memory_used_percent": %s,\n' "$indent" "$mem_used_percent"
     printf '%s    "memory_total_kb": %s,\n' "$indent" "$mem_total"
-    printf '%s    "memory_available_kb": %s\n' "$indent" "$mem_available"
+    printf '%s    "memory_available_kb": %s,\n' "$indent" "$mem_available"
+    printf '%s    "disk_used_percent": %s,\n' "$indent" "$disk_used_percent"
+    printf '%s    "disk_total_kb": %s,\n' "$indent" "$disk_total"
+    printf '%s    "disk_available_kb": %s\n' "$indent" "$disk_available"
     printf '%s}' "$indent"
 }
 
@@ -1915,6 +2067,9 @@ main() {
     local mem_used_values=()
     local mem_total_values=()
     local mem_available_values=()
+    local disk_used_values=()
+    local disk_total_values=()
+    local disk_available_values=()
     local -a sample_jsons=()
     
     if [ "$OUTPUT_FORMAT" = "text" ]; then
@@ -1929,12 +2084,13 @@ main() {
         echo "告警配置:"
         echo "  CPU阈值: ${CPU_THRESHOLD}%"
         echo "  内存阈值: ${MEM_THRESHOLD}%"
+        echo "  磁盘阈值: ${DISK_THRESHOLD}%"
         echo "  告警日志: $log_dir/$log_filename"
         echo "========================================"
         echo ""
         
-        printf "%-6s %8s %10s %12s %15s\n" "次数" "CPU(%)" "内存(%)" "总内存(KB)" "可用内存(KB)"
-        echo "---------------------------------------------------------------"
+        printf "%-6s %8s %10s %12s %15s %10s %12s %15s\n" "次数" "CPU(%)" "内存(%)" "总内存(KB)" "可用内存(KB)" "磁盘(%)" "总磁盘(KB)" "可用磁盘(KB)"
+        echo "-----------------------------------------------------------------------------------------------------------------------"
     fi
     
     for i in $(seq 1 $SAMPLE_COUNT); do
@@ -1950,6 +2106,11 @@ main() {
         local mem_total=$(echo "$mem_info" | awk '{print $2}')
         local mem_available=$(echo "$mem_info" | awk '{print $3}')
         
+        local disk_info=$(get_disk_usage)
+        local disk_used_percent=$(echo "$disk_info" | awk '{print $1}')
+        local disk_total=$(echo "$disk_info" | awk '{print $2}')
+        local disk_available=$(echo "$disk_info" | awk '{print $3}')
+        
         if [ -z "$cpu_usage" ] || [[ "$cpu_usage" =~ [^0-9.] ]]; then
             cpu_usage="0.00"
         fi
@@ -1962,19 +2123,31 @@ main() {
         if [ -z "$mem_available" ] || [[ "$mem_available" =~ [^0-9] ]]; then
             mem_available="0"
         fi
+        if [ -z "$disk_used_percent" ] || [[ "$disk_used_percent" =~ [^0-9.] ]]; then
+            disk_used_percent="0.00"
+        fi
+        if [ -z "$disk_total" ] || [[ "$disk_total" =~ [^0-9] ]]; then
+            disk_total="0"
+        fi
+        if [ -z "$disk_available" ] || [[ "$disk_available" =~ [^0-9] ]]; then
+            disk_available="0"
+        fi
         
         cpu_values+=("$cpu_usage")
         mem_used_values+=("$mem_used_percent")
         mem_total_values+=("$mem_total")
         mem_available_values+=("$mem_available")
+        disk_used_values+=("$disk_used_percent")
+        disk_total_values+=("$disk_total")
+        disk_available_values+=("$disk_available")
         
-        write_alarm_log "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "$os" "$server_id" "$CPU_THRESHOLD" "$MEM_THRESHOLD"
+        write_alarm_log "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "$os" "$server_id" "$CPU_THRESHOLD" "$MEM_THRESHOLD" "$disk_used_percent" "$disk_total" "$disk_available" "$DISK_THRESHOLD"
         
         if [ "$OUTPUT_FORMAT" = "json" ]; then
-            local sample_json=$(generate_sample_json "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "        ")
+            local sample_json=$(generate_sample_json "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "$disk_used_percent" "$disk_total" "$disk_available" "        ")
             sample_jsons+=("$sample_json")
         else
-            printf "%-6d %8s %10s %12d %15d\n" "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available"
+            printf "%-6d %8s %10s %12d %15d %10s %12d %15d\n" "$i" "$cpu_usage" "$mem_used_percent" "$mem_total" "$mem_available" "$disk_used_percent" "$disk_total" "$disk_available"
         fi
         
         if [ "$i" -lt "$SAMPLE_COUNT" ]; then
@@ -2035,6 +2208,31 @@ main() {
         }
         ')
         
+        local disk_stats=$(printf "%s\n" "${disk_used_values[@]}" | awk '
+        BEGIN {
+            min = 1000000000
+            max = -1000000000
+            sum = 0
+            count = 0
+        }
+        {
+            val = $1 + 0
+            if (val < min) min = val
+            if (val > max) max = val
+            sum += val
+            count++
+        }
+        END {
+            if (count > 0) {
+                mean = sum / count
+                fluctuation = max - min
+                printf "%.2f %.2f %.2f %.2f", mean, max, min, fluctuation
+            } else {
+                printf "0.00 0.00 0.00 0.00"
+            }
+        }
+        ')
+        
         local cpu_mean=$(echo "$cpu_stats" | awk '{print $1}')
         local cpu_max=$(echo "$cpu_stats" | awk '{print $2}')
         local cpu_min=$(echo "$cpu_stats" | awk '{print $3}')
@@ -2045,8 +2243,14 @@ main() {
         local mem_min=$(echo "$mem_stats" | awk '{print $3}')
         local mem_fluctuation=$(echo "$mem_stats" | awk '{print $4}')
         
+        local disk_mean=$(echo "$disk_stats" | awk '{print $1}')
+        local disk_max=$(echo "$disk_stats" | awk '{print $2}')
+        local disk_min=$(echo "$disk_stats" | awk '{print $3}')
+        local disk_fluctuation=$(echo "$disk_stats" | awk '{print $4}')
+        
         local cpu_stat_json=$(generate_stat_json "CPU" "$cpu_mean" "$cpu_max" "$cpu_min" "$cpu_fluctuation" "        ")
         local mem_stat_json=$(generate_stat_json "内存" "$mem_mean" "$mem_max" "$mem_min" "$mem_fluctuation" "        ")
+        local disk_stat_json=$(generate_stat_json "磁盘" "$disk_mean" "$disk_max" "$disk_min" "$disk_fluctuation" "        ")
         
         local escaped_os=$(escape_json_string "$os")
         local escaped_server_id=$(escape_json_string "$server_id")
@@ -2059,6 +2263,7 @@ main() {
         echo "        \"sample_interval\": $SAMPLE_INTERVAL,"
         echo "        \"cpu_threshold\": $CPU_THRESHOLD,"
         echo "        \"memory_threshold\": $MEM_THRESHOLD,"
+        echo "        \"disk_threshold\": $DISK_THRESHOLD,"
         echo "        \"alarm_enabled\": \"$ALARM_ENABLED\""
         echo "    },"
         echo "    \"system_info\": {"
@@ -2080,11 +2285,12 @@ main() {
         echo "    ],"
         echo "    \"statistics\": ["
         echo "$cpu_stat_json,"
-        echo "$mem_stat_json"
+        echo "$mem_stat_json,"
+        echo "$disk_stat_json"
         echo "    ]"
         echo "}"
     else
-        echo "---------------------------------------------------------------"
+        echo "-----------------------------------------------------------------------------------------------------------------------"
         echo ""
         echo "========================================"
         echo "汇总统计"
@@ -2094,6 +2300,7 @@ main() {
         
         calculate_stats "CPU" "${cpu_values[@]}"
         calculate_stats "内存" "${mem_used_values[@]}"
+        calculate_stats "磁盘" "${disk_used_values[@]}"
         
         echo "------------------------------------------------"
         echo ""

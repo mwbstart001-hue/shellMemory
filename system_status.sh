@@ -750,7 +750,7 @@ get_memory_info() {
     esac
 }
 
-get_disk_usage_linux() {
+get_disk_usage_impl() {
     local df_output=$(df -k / 2>/dev/null | tail -n 1)
     
     if [ -z "$df_output" ]; then
@@ -779,78 +779,22 @@ get_disk_usage_linux() {
     }')
     
     echo "$disk_used_percent"
+}
+
+get_disk_usage_linux() {
+    get_disk_usage_impl
 }
 
 get_disk_usage_macos() {
-    local df_output=$(df -k / 2>/dev/null | tail -n 1)
-    
-    if [ -z "$df_output" ]; then
-        echo "0.00 0 0"
-        return
-    fi
-    
-    local total=$(echo "$df_output" | awk '{print $2}')
-    local used=$(echo "$df_output" | awk '{print $3}')
-    local available=$(echo "$df_output" | awk '{print $4}')
-    
-    if [ -z "$total" ] || [[ "$total" =~ [^0-9] ]]; then
-        total=0
-    fi
-    if [ -z "$available" ] || [[ "$available" =~ [^0-9] ]]; then
-        available=0
-    fi
-    
-    local disk_used_percent=$(awk -v total="$total" -v available="$available" 'BEGIN {
-        if (total > 0) {
-            used = total - available
-            printf "%.2f %d %d", 100.0 * used / total, total, available
-        } else {
-            printf "0.00 0 0"
-        }
-    }')
-    
-    echo "$disk_used_percent"
+    get_disk_usage_impl
 }
 
 get_disk_usage_windows() {
-    local df_output=$(df -k / 2>/dev/null | tail -n 1)
-    
-    if [ -z "$df_output" ]; then
-        echo "0.00 0 0"
-        return
-    fi
-    
-    local total=$(echo "$df_output" | awk '{print $2}')
-    local used=$(echo "$df_output" | awk '{print $3}')
-    local available=$(echo "$df_output" | awk '{print $4}')
-    
-    if [ -z "$total" ] || [[ "$total" =~ [^0-9] ]]; then
-        total=0
-    fi
-    if [ -z "$available" ] || [[ "$available" =~ [^0-9] ]]; then
-        available=0
-    fi
-    
-    local disk_used_percent=$(awk -v total="$total" -v available="$available" 'BEGIN {
-        if (total > 0) {
-            used = total - available
-            printf "%.2f %d %d", 100.0 * used / total, total, available
-        } else {
-            printf "0.00 0 0"
-        }
-    }')
-    
-    echo "$disk_used_percent"
+    get_disk_usage_impl
 }
 
 get_disk_usage() {
-    local os=$(get_os_type)
-    case "$os" in
-        linux)   get_disk_usage_linux ;;
-        macos)   get_disk_usage_macos ;;
-        windows) get_disk_usage_windows ;;
-        *)       echo "0.00 0 0" ;;
-    esac
+    get_disk_usage_impl
 }
 
 calculate_stats() {
@@ -1078,7 +1022,7 @@ show_query_help() {
 选项:
     -n 数量      查询最近 N 条告警 (默认: 10)
     -d 日期      筛选指定日期 (格式: YYYY-MM-DD)
-    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -t 类型      筛选告警类型 (cpu/memory/disk/all, 默认: all)
     -f 格式      输出格式 (text/json/csv, 默认: text)
     -h, --help   显示此帮助信息
 
@@ -1086,6 +1030,7 @@ show_query_help() {
     $0 query -n 20               查询最近20条告警记录
     $0 query -d 2026-04-26       查询指定日期的告警记录
     $0 query -t cpu -f json       查询CPU类型的告警并以JSON格式输出
+    $0 query -t disk -f json      查询磁盘类型的告警并以JSON格式输出
     $0 query -t cpu -f csv        查询CPU类型的告警并以CSV格式输出
     $0 query -n 50 -t memory      查询最近50条内存告警
     $0 query -d 2026-04-26 -t cpu -f json
@@ -1108,7 +1053,7 @@ show_stats_help() {
 
 选项:
     -d 天数      统计最近 N 天 (默认: 7)
-    -t 类型      筛选告警类型 (cpu/memory/all, 默认: all)
+    -t 类型      筛选告警类型 (cpu/memory/disk/all, 默认: all)
     -f 格式      输出格式 (text/json, 默认: text)
     -h, --help   显示此帮助信息
 
@@ -1117,6 +1062,7 @@ show_stats_help() {
     $0 stats -d 30              统计最近30天告警频率
     $0 stats -t cpu             统计最近7天CPU告警频率
     $0 stats -t memory          统计最近7天内存告警频率
+    $0 stats -t disk            统计最近7天磁盘告警频率
     $0 stats -d 14 -f json      统计最近14天告警频率并以JSON格式输出
 EOF
 }
@@ -1158,7 +1104,7 @@ parse_query_args() {
                 ;;
             t)
                 case "$OPTARG" in
-                    cpu|memory|all)
+                    cpu|memory|disk|all)
                         QUERY_TYPE=$OPTARG
                         ;;
                     CPU)
@@ -1167,11 +1113,14 @@ parse_query_args() {
                     MEMORY|Memory)
                         QUERY_TYPE="memory"
                         ;;
+                    DISK|Disk)
+                        QUERY_TYPE="disk"
+                        ;;
                     ALL|All)
                         QUERY_TYPE="all"
                         ;;
                     *)
-                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        echo "错误: 告警类型只能是 'cpu'、'memory'、'disk' 或 'all'" >&2
                         exit 1
                         ;;
                 esac
@@ -1245,10 +1194,14 @@ parse_alarm_logs() {
     local os
     local mem_total
     local mem_available
+    local disk_total
+    local disk_available
     local cpu_value
     local cpu_threshold
     local mem_value
     local mem_threshold
+    local disk_value
+    local disk_threshold
     
     while IFS= read -r -d '' log_file; do
         if [ ! -f "$log_file" ]; then
@@ -1260,7 +1213,7 @@ parse_alarm_logs() {
                 continue
             fi
             
-            if [[ "$line" =~ \[([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\]\ \[([^]]+)\]\ \[采样=([0-9]+)\]\ \[ServerID=([^]]+)\]\ \[OS=([^]]+)\]\ 总内存=([0-9]+)KB\ 可用内存=([0-9]+)KB ]]; then
+            if [[ "$line" =~ \[([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2})\]\ \[([^]]+)\]\ \[采样=([0-9]+)\]\ \[ServerID=([^]]+)\]\ \[OS=([^]]+)\]\ 总内存=([0-9]+)KB\ 可用内存=([0-9]+)KB( 总磁盘=([0-9]+)KB\ 可用磁盘=([0-9]+)KB)? ]]; then
                 timestamp="${BASH_REMATCH[1]}"
                 week_year="${BASH_REMATCH[2]}"
                 sample_num="${BASH_REMATCH[3]}"
@@ -1268,6 +1221,8 @@ parse_alarm_logs() {
                 os="${BASH_REMATCH[5]}"
                 mem_total="${BASH_REMATCH[6]}"
                 mem_available="${BASH_REMATCH[7]}"
+                disk_total="${BASH_REMATCH[9]:-0}"
+                disk_available="${BASH_REMATCH[10]:-0}"
                 
                 local alarm_entry=""
                 alarm_entry+="timestamp=$timestamp|"
@@ -1277,6 +1232,8 @@ parse_alarm_logs() {
                 alarm_entry+="os=$os|"
                 alarm_entry+="mem_total=$mem_total|"
                 alarm_entry+="mem_available=$mem_available|"
+                alarm_entry+="disk_total=$disk_total|"
+                alarm_entry+="disk_available=$disk_available|"
                 
                 if [[ "$line" =~ CPU=([0-9.]+)%\ \(阈值=([0-9.]+)%\) ]]; then
                     cpu_value="${BASH_REMATCH[1]}"
@@ -1288,6 +1245,12 @@ parse_alarm_logs() {
                     mem_value="${BASH_REMATCH[1]}"
                     mem_threshold="${BASH_REMATCH[2]}"
                     GLOBAL_RAW_ALARMS+=("${alarm_entry}type=memory|value=$mem_value|threshold=$mem_threshold")
+                fi
+                
+                if [[ "$line" =~ 磁盘=([0-9.]+)%\ \(阈值=([0-9.]+)%\) ]]; then
+                    disk_value="${BASH_REMATCH[1]}"
+                    disk_threshold="${BASH_REMATCH[2]}"
+                    GLOBAL_RAW_ALARMS+=("${alarm_entry}type=disk|value=$disk_value|threshold=$disk_threshold")
                 fi
             fi
         done < "$log_file"
@@ -1597,7 +1560,7 @@ query_alarms() {
                 ;;
             t)
                 case "$OPTARG" in
-                    cpu|memory|all)
+                    cpu|memory|disk|all)
                         QUERY_TYPE=$OPTARG
                         ;;
                     CPU)
@@ -1606,11 +1569,14 @@ query_alarms() {
                     MEMORY|Memory)
                         QUERY_TYPE="memory"
                         ;;
+                    DISK|Disk)
+                        QUERY_TYPE="disk"
+                        ;;
                     ALL|All)
                         QUERY_TYPE="all"
                         ;;
                     *)
-                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        echo "错误: 告警类型只能是 'cpu'、'memory'、'disk' 或 'all'" >&2
                         show_query_help
                         exit 1
                         ;;
@@ -1950,7 +1916,7 @@ stats_alarms() {
                 ;;
             t)
                 case "$OPTARG" in
-                    cpu|memory|all)
+                    cpu|memory|disk|all)
                         STATS_TYPE=$OPTARG
                         ;;
                     CPU)
@@ -1959,11 +1925,14 @@ stats_alarms() {
                     MEMORY|Memory)
                         STATS_TYPE="memory"
                         ;;
+                    DISK|Disk)
+                        STATS_TYPE="disk"
+                        ;;
                     ALL|All)
                         STATS_TYPE="all"
                         ;;
                     *)
-                        echo "错误: 告警类型只能是 'cpu'、'memory' 或 'all'" >&2
+                        echo "错误: 告警类型只能是 'cpu'、'memory'、'disk' 或 'all'" >&2
                         show_stats_help
                         exit 1
                         ;;

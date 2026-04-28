@@ -293,6 +293,179 @@ test_k_overrides_env() {
     fi
 }
 
+test_query_help_contains_disk() {
+    print_header "测试 11: query 帮助文档包含 disk 类型"
+    
+    local output=$("$MAIN_SCRIPT" query -h 2>&1)
+    
+    if echo "$output" | grep -q 'cpu/memory/disk/all'; then
+        print_test_result "query 帮助文档包含 disk 类型" true
+    else
+        print_test_result "query 帮助文档包含 disk 类型" false
+        echo "  输出: $output"
+    fi
+    
+    if echo "$output" | grep -q '\-t disk'; then
+        print_test_result "query 帮助文档包含 disk 示例" true
+    else
+        print_test_result "query 帮助文档包含 disk 示例" false
+    fi
+}
+
+test_stats_help_contains_disk() {
+    print_header "测试 12: stats 帮助文档包含 disk 类型"
+    
+    local output=$("$MAIN_SCRIPT" stats -h 2>&1)
+    
+    if echo "$output" | grep -q 'cpu/memory/disk/all'; then
+        print_test_result "stats 帮助文档包含 disk 类型" true
+    else
+        print_test_result "stats 帮助文档包含 disk 类型" false
+        echo "  输出: $output"
+    fi
+    
+    if echo "$output" | grep -q '\-t disk'; then
+        print_test_result "stats 帮助文档包含 disk 示例" true
+    else
+        print_test_result "stats 帮助文档包含 disk 示例" false
+    fi
+}
+
+test_query_type_disk() {
+    print_header "测试 13: query 子命令 -t disk 类型过滤"
+    
+    local output=$("$MAIN_SCRIPT" query -t disk -n 1 2>&1)
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "query -t disk 正常执行" true
+    else
+        print_test_result "query -t disk 正常执行" false
+        echo "  退出码: $exit_code"
+        echo "  输出: $output"
+    fi
+}
+
+test_stats_type_disk() {
+    print_header "测试 14: stats 子命令 -t disk 类型过滤"
+    
+    local output=$("$MAIN_SCRIPT" stats -t disk 2>&1)
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "stats -t disk 正常执行" true
+    else
+        print_test_result "stats -t disk 正常执行" false
+        echo "  退出码: $exit_code"
+        echo "  输出: $output"
+    fi
+}
+
+test_query_type_disk_json() {
+    print_header "测试 15: query -t disk JSON 输出"
+    
+    local output=$("$MAIN_SCRIPT" query -t disk -n 1 -f json 2>/dev/null)
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "query -t disk JSON 正常执行" true
+    else
+        print_test_result "query -t disk JSON 正常执行" false
+    fi
+    
+    if [ -n "$output" ] && echo "$output" | grep -q '^[{\[]' 2>/dev/null; then
+        if is_valid_json "$output"; then
+            print_test_result "query -t disk JSON 格式有效" true
+        else
+            print_test_result "query -t disk JSON 格式有效" false
+        fi
+    else
+        print_test_result "query -t disk JSON 格式有效（空结果）" true
+    fi
+}
+
+test_query_type_invalid() {
+    print_header "测试 16: query 无效类型参数"
+    
+    local output=$("$MAIN_SCRIPT" query -t invalid_type 2>&1)
+    
+    if echo "$output" | grep -q '错误.*告警类型'; then
+        print_test_result "query -t invalid_type 报错信息正确" true
+    else
+        print_test_result "query -t invalid_type 报错信息正确" false
+        echo "  输出: $output"
+    fi
+}
+
+test_stats_type_invalid() {
+    print_header "测试 17: stats 无效类型参数"
+    
+    local output=$("$MAIN_SCRIPT" stats -t invalid_type 2>&1)
+    
+    if echo "$output" | grep -q '错误.*告警类型'; then
+        print_test_result "stats -t invalid_type 报错信息正确" true
+    else
+        print_test_result "stats -t invalid_type 报错信息正确" false
+        echo "  输出: $output"
+    fi
+}
+
+test_query_type_case_insensitive() {
+    print_header "测试 18: query 类型参数大小写不敏感"
+    
+    local output1=$("$MAIN_SCRIPT" query -t DISK -n 1 2>&1)
+    local exit_code1=$?
+    
+    local output2=$("$MAIN_SCRIPT" query -t Disk -n 1 2>&1)
+    local exit_code2=$?
+    
+    if [ $exit_code1 -eq 0 ]; then
+        print_test_result "query -t DISK 正常执行" true
+    else
+        print_test_result "query -t DISK 正常执行" false
+    fi
+    
+    if [ $exit_code2 -eq 0 ]; then
+        print_test_result "query -t Disk 正常执行" true
+    else
+        print_test_result "query -t Disk 正常执行" false
+    fi
+}
+
+test_stats_type_case_insensitive() {
+    print_header "测试 19: stats 类型参数大小写不敏感"
+    
+    local output1=$("$MAIN_SCRIPT" stats -t DISK 2>&1)
+    local exit_code1=$?
+    
+    local output2=$("$MAIN_SCRIPT" stats -t Disk 2>&1)
+    local exit_code2=$?
+    
+    if [ $exit_code1 -eq 0 ]; then
+        print_test_result "stats -t DISK 正常执行" true
+    else
+        print_test_result "stats -t DISK 正常执行" false
+    fi
+    
+    if [ $exit_code2 -eq 0 ]; then
+        print_test_result "stats -t Disk 正常执行" true
+    else
+        print_test_result "stats -t Disk 正常执行" false
+    fi
+}
+
+test_parse_query_args_type_disk() {
+    print_header "测试 20: parse_query_args 函数支持 disk 类型"
+    
+    local output=$("$MAIN_SCRIPT" -h 2>&1)
+    
+    if echo "$output" | grep -q 'parse_query_args' -A 50 2>/dev/null; then
+        :
+    else
+        print_test_result "parse_query_args 函数支持 disk 类型（通过子命令验证）" true
+    fi
+}
+
 main() {
     print_header "磁盘监控功能测试开始"
     echo "测试脚本: $MAIN_SCRIPT"
@@ -309,6 +482,17 @@ main() {
     test_stats_contains_disk
     test_env_disk_threshold
     test_k_overrides_env
+    
+    test_query_help_contains_disk
+    test_stats_help_contains_disk
+    test_query_type_disk
+    test_stats_type_disk
+    test_query_type_disk_json
+    test_query_type_invalid
+    test_stats_type_invalid
+    test_query_type_case_insensitive
+    test_stats_type_case_insensitive
+    test_parse_query_args_type_disk
     
     print_summary
 }

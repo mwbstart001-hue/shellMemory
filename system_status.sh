@@ -1334,9 +1334,15 @@ filter_alarms() {
         return 0
     fi
 
-    while IFS= read -r line; do
-        [ -n "$line" ] && GLOBAL_FILTERED_ALARMS+=("$line")
-    done < <(printf '%s\n' "${selected_list[@]}" | tail -r)
+    if command -v tac >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            [ -n "$line" ] && GLOBAL_FILTERED_ALARMS+=("$line")
+        done < <(printf '%s\n' "${selected_list[@]}" | tac)
+    else
+        while IFS= read -r line; do
+            [ -n "$line" ] && GLOBAL_FILTERED_ALARMS+=("$line")
+        done < <(printf '%s\n' "${selected_list[@]}" | tail -r)
+    fi
 }
 
 extract_alarm_field() {
@@ -1404,6 +1410,8 @@ output_alarms_text() {
             display_type="CPU"
         elif [ "$alarm_type" = "memory" ]; then
             display_type="内存"
+        elif [ "$alarm_type" = "disk" ]; then
+            display_type="磁盘"
         else
             display_type="$alarm_type"
         fi
@@ -1664,13 +1672,14 @@ calculate_daily_stats() {
     GLOBAL_STATS_TOTAL=()
     
     if [ ${#GLOBAL_RAW_ALARMS[@]} -eq 0 ]; then
-        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0")
+        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0" "total_disk=0")
         return 0
     fi
     
     local total_count=0
     local total_cpu=0
     local total_memory=0
+    local total_disk=0
     
     local today=$(date "+%Y-%m-%d")
     local today_sec=$(date -j -f "%Y-%m-%d" "$today" "+%s" 2>/dev/null || echo "0")
@@ -1711,7 +1720,7 @@ calculate_daily_stats() {
     done
     
     if [ ${#filtered_entries[@]} -eq 0 ]; then
-        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0")
+        GLOBAL_STATS_TOTAL=("total_count=0" "total_cpu=0" "total_memory=0" "total_disk=0")
         return 0
     fi
     
@@ -1724,6 +1733,7 @@ calculate_daily_stats() {
     local day_count=0
     local day_cpu=0
     local day_memory=0
+    local day_disk=0
     
     local item
     local item_date
@@ -1735,12 +1745,13 @@ calculate_daily_stats() {
         
         if [ "$current_date" != "$item_date" ]; then
             if [ -n "$current_date" ]; then
-                GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}")
+                GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}|disk_count=${day_disk}")
             fi
             current_date="$item_date"
             day_count=0
             day_cpu=0
             day_memory=0
+            day_disk=0
         fi
         
         ((day_count++))
@@ -1752,14 +1763,17 @@ calculate_daily_stats() {
         elif [ "$item_type" = "memory" ]; then
             ((day_memory++))
             ((total_memory++))
+        elif [ "$item_type" = "disk" ]; then
+            ((day_disk++))
+            ((total_disk++))
         fi
     done
     
     if [ -n "$current_date" ]; then
-        GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}")
+        GLOBAL_STATS_DAYS+=("date=${current_date}|count=${day_count}|cpu_count=${day_cpu}|memory_count=${day_memory}|disk_count=${day_disk}")
     fi
     
-    GLOBAL_STATS_TOTAL=("total_count=$total_count" "total_cpu=$total_cpu" "total_memory=$total_memory")
+    GLOBAL_STATS_TOTAL=("total_count=$total_count" "total_cpu=$total_cpu" "total_memory=$total_memory" "total_disk=$total_disk")
 }
 
 extract_stats_field() {
@@ -1789,6 +1803,7 @@ output_stats_text() {
     local total_count=$(extract_stats_field "${GLOBAL_STATS_TOTAL[0]}" "total_count")
     local total_cpu=$(extract_stats_field "${GLOBAL_STATS_TOTAL[1]}" "total_cpu")
     local total_memory=$(extract_stats_field "${GLOBAL_STATS_TOTAL[2]}" "total_memory")
+    local total_disk=$(extract_stats_field "${GLOBAL_STATS_TOTAL[3]}" "total_disk")
     
     if [ ${#GLOBAL_STATS_DAYS[@]} -eq 0 ]; then
         echo "----------------------------------------"
@@ -1802,13 +1817,14 @@ output_stats_text() {
     if [ "$query_type" = "all" ]; then
         echo "  CPU告警: $total_cpu 次"
         echo "  内存告警: $total_memory 次"
+        echo "  磁盘告警: $total_disk 次"
     fi
     echo "========================================"
     echo ""
     
     if [ "$query_type" = "all" ]; then
-        printf "%-12s %-8s %-8s %-8s\n" "日期" "总次数" "CPU次数" "内存次数"
-        echo "----------------------------------------"
+        printf "%-12s %-8s %-8s %-8s %-8s\n" "日期" "总次数" "CPU次数" "内存次数" "磁盘次数"
+        echo "------------------------------------------------"
         
         local entry
         for entry in "${GLOBAL_STATS_DAYS[@]}"; do
@@ -1816,8 +1832,9 @@ output_stats_text() {
             local count=$(extract_stats_field "$entry" "count")
             local cpu_count=$(extract_stats_field "$entry" "cpu_count")
             local memory_count=$(extract_stats_field "$entry" "memory_count")
+            local disk_count=$(extract_stats_field "$entry" "disk_count")
             
-            printf "%-12s %-8s %-8s %-8s\n" "$date" "$count" "$cpu_count" "$memory_count"
+            printf "%-12s %-8s %-8s %-8s %-8s\n" "$date" "$count" "$cpu_count" "$memory_count" "$disk_count"
         done
     else
         printf "%-12s %-8s\n" "日期" "告警次数"
@@ -1844,6 +1861,7 @@ output_stats_json() {
     local total_count=$(extract_stats_field "${GLOBAL_STATS_TOTAL[0]}" "total_count")
     local total_cpu=$(extract_stats_field "${GLOBAL_STATS_TOTAL[1]}" "total_cpu")
     local total_memory=$(extract_stats_field "${GLOBAL_STATS_TOTAL[2]}" "total_memory")
+    local total_disk=$(extract_stats_field "${GLOBAL_STATS_TOTAL[3]}" "total_disk")
     
     echo "{"
     echo "    \"query_info\": {"
@@ -1853,7 +1871,8 @@ output_stats_json() {
     echo "    \"total\": {"
     echo "        \"total_count\": $total_count,"
     echo "        \"cpu_count\": $total_cpu,"
-    echo "        \"memory_count\": $total_memory"
+    echo "        \"memory_count\": $total_memory,"
+    echo "        \"disk_count\": $total_disk"
     echo "    },"
     
     if [ ${#GLOBAL_STATS_DAYS[@]} -eq 0 ]; then
@@ -1870,12 +1889,14 @@ output_stats_json() {
             local count=$(extract_stats_field "$entry" "count")
             local cpu_count=$(extract_stats_field "$entry" "cpu_count")
             local memory_count=$(extract_stats_field "$entry" "memory_count")
+            local disk_count=$(extract_stats_field "$entry" "disk_count")
             
             echo "        {"
             echo "            \"date\": \"$date\","
             echo "            \"total_count\": $count,"
             echo "            \"cpu_count\": $cpu_count,"
-            echo "            \"memory_count\": $memory_count"
+            echo "            \"memory_count\": $memory_count,"
+            echo "            \"disk_count\": $disk_count"
             
             if [ $index -lt $((total - 1)) ]; then
                 echo "        },"

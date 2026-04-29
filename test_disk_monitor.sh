@@ -454,8 +454,165 @@ test_stats_type_case_insensitive() {
     fi
 }
 
+create_test_logs_with_disk_alarm() {
+    print_header "测试 20: 创建包含磁盘告警的测试日志"
+    
+    local test_logs_dir="$SCRIPT_DIR/logs"
+    local test_log_file="$test_logs_dir/alarm_test.log"
+    
+    mkdir -p "$test_logs_dir"
+    
+    local today=$(date '+%Y-%m-%d')
+    local week_num=$(date '+%V')
+    
+    cat > "$test_log_file" << EOF
+[$today 10:00:00] [2026年第${week_num}周] [采样=1] [ServerID=TEST-001] [OS=macos] 总内存=16777216KB 可用内存=2988368KB 总磁盘=500000000KB 可用磁盘=250000000KB [ALARM] CPU=85.23% (阈值=80.0%) [ALARM] 内存=82.19% (阈值=80.0%) [ALARM] 磁盘=85.5% (阈值=80.0%)
+[$today 10:01:00] [2026年第${week_num}周] [采样=2] [ServerID=TEST-001] [OS=macos] 总内存=16777216KB 可用内存=2988368KB 总磁盘=500000000KB 可用磁盘=250000000KB [ALARM] 磁盘=86.0% (阈值=80.0%)
+[$today 10:02:00] [2026年第${week_num}周] [采样=3] [ServerID=TEST-001] [OS=macos] 总内存=16777216KB 可用内存=2988368KB 总磁盘=500000000KB 可用磁盘=250000000KB [ALARM] CPU=88.0% (阈值=80.0%)
+EOF
+    
+    if [ -f "$test_log_file" ]; then
+        print_test_result "测试日志文件创建成功" true
+        echo "  日志文件: $test_log_file"
+        echo "  日志内容预览:"
+        head -3 "$test_log_file" | while IFS= read -r line; do
+            echo "    $line"
+        done
+    else
+        print_test_result "测试日志文件创建成功" false
+    fi
+    
+    TEST_LOG_FILE="$test_log_file"
+}
+
+test_stats_disk_alarm_count() {
+    print_header "测试 21: stats 命令统计磁盘告警数量"
+    
+    if [ -z "${TEST_LOG_FILE:-}" ] || [ ! -f "$TEST_LOG_FILE" ]; then
+        print_test_result "stats 命令统计磁盘告警（跳过：无测试日志）" true
+        return
+    fi
+    
+    local output=$("$MAIN_SCRIPT" stats 2>&1)
+    local exit_code=$?
+    
+    echo "  stats 命令输出:"
+    echo "$output" | head -30
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "stats 命令执行成功" true
+    else
+        print_test_result "stats 命令执行成功" false
+        echo "  退出码: $exit_code"
+    fi
+    
+    if echo "$output" | grep -q '磁盘告警'; then
+        print_test_result "stats 输出包含磁盘告警统计" true
+    else
+        print_test_result "stats 输出包含磁盘告警统计" false
+    fi
+    
+    if echo "$output" | grep -q '磁盘次数'; then
+        print_test_result "stats 表格包含磁盘次数列" true
+    else
+        print_test_result "stats 表格包含磁盘次数列" false
+    fi
+}
+
+test_stats_disk_type_filter() {
+    print_header "测试 22: stats -t disk 类型筛选"
+    
+    if [ -z "${TEST_LOG_FILE:-}" ] || [ ! -f "$TEST_LOG_FILE" ]; then
+        print_test_result "stats -t disk 类型筛选（跳过：无测试日志）" true
+        return
+    fi
+    
+    local output=$("$MAIN_SCRIPT" stats -t disk 2>&1)
+    local exit_code=$?
+    
+    echo "  stats -t disk 输出:"
+    echo "$output" | head -30
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "stats -t disk 执行成功" true
+    else
+        print_test_result "stats -t disk 执行成功" false
+    fi
+}
+
+test_stats_json_disk_count() {
+    print_header "测试 23: stats JSON 输出包含磁盘统计"
+    
+    if [ -z "${TEST_LOG_FILE:-}" ] || [ ! -f "$TEST_LOG_FILE" ]; then
+        print_test_result "stats JSON 输出包含磁盘统计（跳过：无测试日志）" true
+        return
+    fi
+    
+    local output=$("$MAIN_SCRIPT" stats -f json 2>&1)
+    local exit_code=$?
+    
+    echo "  stats JSON 输出:"
+    echo "$output" | head -50
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "stats -f json 执行成功" true
+    else
+        print_test_result "stats -f json 执行成功" false
+    fi
+    
+    if is_valid_json "$output"; then
+        print_test_result "stats JSON 格式有效" true
+    else
+        print_test_result "stats JSON 格式有效" false
+    fi
+    
+    if echo "$output" | grep -q '"disk_count"'; then
+        print_test_result "stats JSON 包含 disk_count 字段" true
+    else
+        print_test_result "stats JSON 包含 disk_count 字段" false
+    fi
+}
+
+test_query_disk_alarm_display() {
+    print_header "测试 24: query 子命令显示磁盘告警"
+    
+    if [ -z "${TEST_LOG_FILE:-}" ] || [ ! -f "$TEST_LOG_FILE" ]; then
+        print_test_result "query 子命令显示磁盘告警（跳过：无测试日志）" true
+        return
+    fi
+    
+    local output=$("$MAIN_SCRIPT" query -t disk -n 10 2>&1)
+    local exit_code=$?
+    
+    echo "  query -t disk 输出:"
+    echo "$output" | head -30
+    
+    if [ $exit_code -eq 0 ]; then
+        print_test_result "query -t disk 执行成功" true
+    else
+        print_test_result "query -t disk 执行成功" false
+    fi
+    
+    if echo "$output" | grep -q '磁盘'; then
+        print_test_result "query 输出显示 '磁盘' 类型（不是 'disk'）" true
+    else
+        print_test_result "query 输出显示 '磁盘' 类型（不是 'disk'）" false
+    fi
+}
+
+cleanup_test_logs() {
+    print_header "测试 25: 清理测试日志"
+    
+    if [ -n "${TEST_LOG_FILE:-}" ] && [ -f "$TEST_LOG_FILE" ]; then
+        rm -f "$TEST_LOG_FILE"
+        print_test_result "测试日志文件已清理" true
+    else
+        print_test_result "测试日志文件已清理（无需要清理的文件）" true
+    fi
+}
+
 test_parse_query_args_type_disk() {
-    print_header "测试 20: parse_query_args 函数支持 disk 类型"
+    print_header "测试 26: parse_query_args 函数支持 disk 类型"
     
     local output=$("$MAIN_SCRIPT" -h 2>&1)
     
@@ -492,7 +649,15 @@ main() {
     test_stats_type_invalid
     test_query_type_case_insensitive
     test_stats_type_case_insensitive
+    
+    create_test_logs_with_disk_alarm
+    test_stats_disk_alarm_count
+    test_stats_disk_type_filter
+    test_stats_json_disk_count
+    test_query_disk_alarm_display
+    
     test_parse_query_args_type_disk
+    cleanup_test_logs
     
     print_summary
 }

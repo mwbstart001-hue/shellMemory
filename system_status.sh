@@ -375,14 +375,22 @@ parse_args() {
         case $opt in
             n)
                 if ! is_number "$OPTARG"; then
-                    echo "错误: 采样次数必须是有效的数字"
+                    echo "错误: 采样次数必须是有效的数字" >&2
+                    exit 1
+                fi
+                if [ "$OPTARG" -lt 1 ]; then
+                    echo "错误: 采样次数必须大于0" >&2
                     exit 1
                 fi
                 SAMPLE_COUNT=$OPTARG
                 ;;
             i)
                 if ! is_number "$OPTARG"; then
-                    echo "错误: 采样间隔必须是有效的数字"
+                    echo "错误: 采样间隔必须是有效的数字" >&2
+                    exit 1
+                fi
+                if (( $(awk -v val="$OPTARG" 'BEGIN {print (val <= 0)}') )); then
+                    echo "错误: 采样间隔必须大于0" >&2
                     exit 1
                 fi
                 SAMPLE_INTERVAL=$OPTARG
@@ -393,28 +401,28 @@ parse_args() {
                         OUTPUT_FORMAT=$OPTARG
                         ;;
                     *)
-                        echo "错误: 输出格式只能是 'text' 或 'json'"
+                        echo "错误: 输出格式只能是 'text' 或 'json'" >&2
                         exit 1
                         ;;
                 esac
                 ;;
             c)
                 if ! is_number "$OPTARG"; then
-                    echo "错误: CPU阈值必须是有效的数字"
+                    echo "错误: CPU阈值必须是有效的数字" >&2
                     exit 1
                 fi
                 CPU_THRESHOLD=$OPTARG
                 ;;
             m)
                 if ! is_number "$OPTARG"; then
-                    echo "错误: 内存阈值必须是有效的数字"
+                    echo "错误: 内存阈值必须是有效的数字" >&2
                     exit 1
                 fi
                 MEM_THRESHOLD=$OPTARG
                 ;;
             k)
                 if ! is_number "$OPTARG"; then
-                    echo "错误: 磁盘阈值必须是有效的数字"
+                    echo "错误: 磁盘阈值必须是有效的数字" >&2
                     exit 1
                 fi
                 DISK_THRESHOLD=$OPTARG
@@ -426,7 +434,7 @@ parse_args() {
                 elif [ "$lower_value" = "false" ] || [ "$lower_value" = "0" ] || [ "$lower_value" = "no" ]; then
                     ALARM_ENABLED="false"
                 else
-                    echo "错误: 告警启用选项只能是 'true', 'false', 'yes', 'no', '1', '0'"
+                    echo "错误: 告警启用选项只能是 'true', 'false', 'yes', 'no', '1', '0'" >&2
                     exit 1
                 fi
                 ;;
@@ -441,20 +449,20 @@ parse_args() {
                         exit 0
                         ;;
                     *)
-                        echo "错误: 无效选项 --$OPTARG"
-                        show_help
+                        echo "错误: 无效选项 --$OPTARG" >&2
+                        show_help >&2
                         exit 1
                         ;;
                 esac
                 ;;
             \?)
-                echo "错误: 无效选项 -$OPTARG"
-                show_help
+                echo "错误: 无效选项 -$OPTARG" >&2
+                show_help >&2
                 exit 1
                 ;;
             :)
-                echo "错误: 选项 -$OPTARG 需要参数"
-                show_help
+                echo "错误: 选项 -$OPTARG 需要参数" >&2
+                show_help >&2
                 exit 1
                 ;;
         esac

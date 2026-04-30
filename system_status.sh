@@ -374,12 +374,8 @@ parse_args() {
     while getopts ":n:i:f:c:m:k:a:h-" opt; do
         case $opt in
             n)
-                if ! is_number "$OPTARG"; then
-                    echo "错误: 采样次数必须是有效的数字" >&2
-                    exit 1
-                fi
-                if [ "$OPTARG" -lt 1 ]; then
-                    echo "错误: 采样次数必须大于0" >&2
+                if ! is_integer "$OPTARG"; then
+                    echo "错误: 采样次数必须是正整数" >&2
                     exit 1
                 fi
                 SAMPLE_COUNT=$OPTARG
@@ -391,6 +387,10 @@ parse_args() {
                 fi
                 if (( $(awk -v val="$OPTARG" 'BEGIN {print (val <= 0)}') )); then
                     echo "错误: 采样间隔必须大于0" >&2
+                    exit 1
+                fi
+                if (( $(awk -v val="$OPTARG" 'BEGIN {print (val < 0.1)}') )); then
+                    echo "错误: 采样间隔必须大于等于0.1秒" >&2
                     exit 1
                 fi
                 SAMPLE_INTERVAL=$OPTARG
@@ -483,7 +483,11 @@ get_os_type() {
 }
 
 is_number() {
-    [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]
+    [[ "$1" =~ ^-?(0|[1-9][0-9]*)(\.[0-9]+)?$ ]]
+}
+
+is_integer() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
 check_threshold() {
@@ -1093,12 +1097,8 @@ parse_query_args() {
     while getopts ":n:d:t:f:h-" opt; do
         case $opt in
             n)
-                if ! is_number "$OPTARG"; then
-                    echo "错误: 查询数量必须是有效的数字" >&2
-                    exit 1
-                fi
-                if [ "$OPTARG" -lt 1 ]; then
-                    echo "错误: 查询数量必须大于0" >&2
+                if ! is_integer "$OPTARG"; then
+                    echo "错误: 查询数量必须是正整数" >&2
                     exit 1
                 fi
                 QUERY_COUNT=$OPTARG
@@ -1554,13 +1554,8 @@ query_alarms() {
     while getopts ":n:d:t:f:h-" opt; do
         case $opt in
             n)
-                if ! is_number "$OPTARG"; then
-                    echo "错误: 查询数量必须是有效的数字" >&2
-                    show_query_help
-                    exit 1
-                fi
-                if [ "$OPTARG" -lt 1 ]; then
-                    echo "错误: 查询数量必须大于0" >&2
+                if ! is_integer "$OPTARG"; then
+                    echo "错误: 查询数量必须是正整数" >&2
                     show_query_help
                     exit 1
                 fi
@@ -1931,13 +1926,8 @@ stats_alarms() {
     while getopts ":d:t:f:h-" opt; do
         case $opt in
             d)
-                if ! is_number "$OPTARG"; then
-                    echo "错误: 天数必须是有效的数字" >&2
-                    show_stats_help
-                    exit 1
-                fi
-                if [ "$OPTARG" -lt 1 ]; then
-                    echo "错误: 天数必须大于0" >&2
+                if ! is_integer "$OPTARG"; then
+                    echo "错误: 天数必须是正整数" >&2
                     show_stats_help
                     exit 1
                 fi
